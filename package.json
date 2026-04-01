@@ -1,0 +1,41 @@
+{
+  "name": "claude-code-bg-process-manager",
+  "version": "1.0.0",
+  "description": "MCP server for background process management in Claude Code on Windows",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "bg-manager": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "background-process",
+    "process-manager",
+    "windows",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AndrewKirkovski/claude-code-bg-process-manager-windows"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
