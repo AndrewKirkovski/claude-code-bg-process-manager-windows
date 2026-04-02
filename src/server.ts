@@ -327,7 +327,7 @@ export function startHttpServer(preferredPort?: number): Promise<number> {
         httpServer = srv;
         pollInterval = setInterval(broadcastProcessList, 2000);
         pollInterval.unref();
-        process.stderr.write(`bg-manager UI: http://127.0.0.1:${port}\n`);
+        // Startup banner printed by index.ts after port is known
         resolve(port);
       });
     }

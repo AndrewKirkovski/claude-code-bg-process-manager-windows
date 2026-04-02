@@ -2,6 +2,8 @@
 
 MCP server for managing background processes in [Claude Code](https://claude.ai/code) on Windows.
 
+[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=bg-manager&config=eyJjb21tYW5kIjoiY21kIC9jIG5weCAteSBnaXRodWI6QW5kcmV3S2lya292c2tpL2NsYXVkZS1jb2RlLWJnLXByb2Nlc3MtbWFuYWdlci13aW5kb3dzIn0%3D)
+
 ![bg-manager dashboard](screenshot.png)
 
 ## Why This Exists
@@ -20,10 +22,10 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 ### What this MCP server provides
 
 - **SQLite database** — all process metadata stored in `~/.bg-manager/bg-manager.db` (WAL mode), shared across all projects
-- **Web dashboard** — live process monitoring at `http://127.0.0.1:7890` with ANSI color log rendering, SSE live updates, and kill/cleanup actions
+- **Web dashboard** — live process monitoring at `http://127.0.0.1:7890` with xterm.js terminal rendering, SSE live updates, and kill/cleanup actions
 - **Automatic PID tracking** — every `bg_run` records the PID, command, intent, and timestamp
 - **Reliable process killing** — `bg_kill` uses PowerShell `Stop-Process` with recursive tree kill (children first, then parent). Never `taskkill`, never bash `kill`
-- **Log capture with colors** — all stdout/stderr goes to `~/.bg-manager/logs/`, with `FORCE_COLOR=1` to preserve ANSI colors
+- **Log capture with colors** — all stdout/stderr goes to `~/.bg-manager/logs/`, with PTY support for programs that need `isatty()=true` for color output
 - **Port management** — `bg_port_check` uses `netstat -ano` (the only reliable method on Windows), correlates PIDs with tracked processes by walking the parent chain
 - **Cross-project visibility** — all projects share one central database, viewable in the web dashboard
 - **Smart spawning** — simple commands spawn directly (PID = actual process), complex commands (pipes, `&&`) spawn via Git Bash with proper wrapper tracking
@@ -36,7 +38,7 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 | `bg_run(name, command, intent)` | Start a background process with auto-logging and PID tracking |
 | `bg_list()` | List all tracked processes with alive/dead status |
 | `bg_kill(name)` | Kill a tracked process by name (full process tree) |
-| `bg_logs(name, lines?)` | Read last N lines from a process log |
+| `bg_logs(name, lines?, raw?, filter?)` | Read last N lines from a process log (ANSI stripped by default; `raw=true` preserves colors; `filter` for substring matching) |
 | `bg_port_check(port)` | Check what's listening on a port (with tracked process correlation) |
 | `bg_port_kill(port)` | Kill whatever is listening on a port |
 | `bg_cleanup()` | Remove dead entries from registry |
@@ -44,24 +46,35 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 
 ## Install
 
-One command — installs directly from GitHub, no npm publish needed:
+### Cursor (one click)
+
+Click the badge at the top of this README, or use the button below:
+
+[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=bg-manager&config=eyJjb21tYW5kIjoiY21kIC9jIG5weCAteSBnaXRodWI6QW5kcmV3S2lya292c2tpL2NsYXVkZS1jb2RlLWJnLXByb2Nlc3MtbWFuYWdlci13aW5kb3dzIn0%3D)
+
+### Claude Code
 
 ```bash
-# Windows (global, all projects)
+# Global (all projects)
 claude mcp add -s user bg-manager -- cmd /c npx -y github:AndrewKirkovski/claude-code-bg-process-manager-windows
 
-# Linux/macOS (global, all projects)
-claude mcp add -s user bg-manager -- npx -y github:AndrewKirkovski/claude-code-bg-process-manager-windows
+# Per-project only (creates .mcp.json in current directory)
+claude mcp add bg-manager -- cmd /c npx -y github:AndrewKirkovski/claude-code-bg-process-manager-windows
 ```
 
-For per-project only (creates `.mcp.json` in current directory):
+### Manual (any MCP client)
 
-```bash
-# Windows
-claude mcp add bg-manager -- cmd /c npx -y github:AndrewKirkovski/claude-code-bg-process-manager-windows
+Add to your MCP client configuration:
 
-# Linux/macOS
-claude mcp add bg-manager -- npx -y github:AndrewKirkovski/claude-code-bg-process-manager-windows
+```json
+{
+  "mcpServers": {
+    "bg-manager": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "github:AndrewKirkovski/claude-code-bg-process-manager-windows"]
+    }
+  }
+}
 ```
 
 ### From source (local development)
@@ -88,10 +101,12 @@ All data is centralized in `~/.bg-manager/` — shared across all projects. Lega
 The built-in web dashboard at `http://127.0.0.1:7890` provides:
 
 - **Live process list** grouped by project with ALIVE/DEAD status badges
-- **ANSI color log viewer** — terminal colors rendered in the browser
+- **xterm.js terminal** — full terminal emulation with ANSI color rendering
 - **SSE live updates** — process status and log streaming update in real-time
 - **Kill/cleanup actions** — manage processes directly from the browser
 - **Project filter** — focus on a specific project's processes
+- **Dark/light themes** — OneDark Pro (dark) / Bluloco Light (light) with CSS filter inversion
+- **Hash routing** — direct links to processes via `/#/:project/:name`
 
 The dashboard starts automatically when the MCP server launches. Use `bg_status` to get the actual URL (port may increment if 7890 is taken).
 
@@ -114,79 +129,13 @@ Add the following to your project's `CLAUDE.md` (or global `~/.claude/CLAUDE.md`
 
 This is important because without these instructions, Claude Code will default to its built-in `run_in_background` which loses PID tracking and makes process management unreliable on Windows.
 
-## Sample Claude Code Hooks
-
-Hooks are shell commands that Claude Code runs automatically in response to events. Add these to your `~/.claude/settings.json` or project `.claude/settings.json`:
-
-### Auto-cleanup dead processes on session start
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node -e \"const{existsSync,readFileSync,writeFileSync}=require('fs');const f='.local/bg-processes.json';if(existsSync(f)){const r=JSON.parse(readFileSync(f,'utf-8')).filter(e=>{try{process.kill(e.pid,0);return true}catch{return false}});writeFileSync(f,JSON.stringify(r,null,2))}\"",
-            "timeout": 5000
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Warn if a server is already running before starting a new one
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "mcp__bg-manager__bg_run",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node -e \"const{existsSync,readFileSync}=require('fs');const f='.local/bg-processes.json';if(existsSync(f)){const alive=JSON.parse(readFileSync(f,'utf-8')).filter(e=>{try{process.kill(e.pid,0);return true}catch{return false}});if(alive.length>0){console.log('WARNING: '+alive.length+' process(es) still running: '+alive.map(e=>e.name).join(', '))}}\"",
-            "timeout": 5000
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Log all bg_run invocations
-
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "mcp__bg-manager__bg_run",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo \"[$(date +%H:%M:%S)] bg_run invoked\" >> .local/bg-audit.log",
-            "timeout": 3000
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
 ## How It Works
 
 ### Process spawning
 - Simple commands (no pipes/redirects) are spawned directly — PID is the actual process
 - Complex commands (with `&&`, `|`, `;`, etc.) spawn via Git Bash — PID is the bash wrapper
 - All output (stdout + stderr) is redirected to `~/.bg-manager/logs/<project-slug>-<name>.log`
+- Programs needing color output (e.g. wippy.exe) are spawned via node-pty for `isatty()=true`
 - Python processes get `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` automatically
 - `FORCE_COLOR=1` is set to preserve ANSI color codes in log output
 
@@ -203,12 +152,12 @@ Hooks are shell commands that Claude Code runs automatically in response to even
 ### Architecture
 
 ```
-MCP Client (Claude) <--stdio--> bg-manager <--HTTP:7890--> Web Browser
-                                    |
-                                    v
-                           ~/.bg-manager/
-                             bg-manager.db   (SQLite, WAL mode)
-                             logs/           (per-process log files)
+MCP Client (Claude/Cursor) <--stdio--> bg-manager <--HTTP:7890--> Web Browser
+                                           |
+                                           v
+                                  ~/.bg-manager/
+                                    bg-manager.db   (SQLite, WAL mode)
+                                    logs/           (per-process log files)
 ```
 
 ## License

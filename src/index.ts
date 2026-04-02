@@ -223,9 +223,15 @@ async function main() {
   // Migrate legacy per-project JSON registry if present
   migrateFromJson(process.cwd());
 
-  // Start web dashboard (non-blocking, prints URL to stderr)
+  // Start web dashboard (non-blocking)
   startHttpServer().then((port) => {
     httpPort = port;
+    process.stderr.write(
+      `\n  bg-manager v2.0.0\n` +
+      `  Dashboard: http://127.0.0.1:${port}\n` +
+      `  Database:  ${DB_PATH}\n` +
+      `  Project:   ${process.cwd()}\n\n`
+    );
   }).catch((err) => {
     process.stderr.write(`bg-manager: failed to start web UI: ${err.message}\n`);
   });
