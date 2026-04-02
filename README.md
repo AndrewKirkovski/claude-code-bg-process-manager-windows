@@ -2,6 +2,8 @@
 
 MCP server for managing background processes in [Claude Code](https://claude.ai/code) on Windows.
 
+![bg-manager dashboard](screenshot.png)
+
 ## Why This Exists
 
 Claude Code on Windows (Git Bash / MSYS2) has a fundamental process management problem. Without this tool, Claude Code will repeatedly:
@@ -17,11 +19,13 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 
 ### What this MCP server provides
 
-- **Automatic PID tracking** — every `bg_run` records the PID, command, intent, and timestamp in a JSON registry
+- **SQLite database** — all process metadata stored in `~/.bg-manager/bg-manager.db` (WAL mode), shared across all projects
+- **Web dashboard** — live process monitoring at `http://127.0.0.1:7890` with ANSI color log rendering, SSE live updates, and kill/cleanup actions
+- **Automatic PID tracking** — every `bg_run` records the PID, command, intent, and timestamp
 - **Reliable process killing** — `bg_kill` uses PowerShell `Stop-Process` with recursive tree kill (children first, then parent). Never `taskkill`, never bash `kill`
-- **Log capture** — all stdout/stderr goes to `.local/bg-logs/<name>.log`, readable via `bg_logs`
+- **Log capture with colors** — all stdout/stderr goes to `~/.bg-manager/logs/`, with `FORCE_COLOR=1` to preserve ANSI colors
 - **Port management** — `bg_port_check` uses `netstat -ano` (the only reliable method on Windows), correlates PIDs with tracked processes by walking the parent chain
-- **Session-persistent registry** — `.local/bg-processes.json` survives across conversation turns
+- **Cross-project visibility** — all projects share one central database, viewable in the web dashboard
 - **Smart spawning** — simple commands spawn directly (PID = actual process), complex commands (pipes, `&&`) spawn via Git Bash with proper wrapper tracking
 - **Python-friendly** — automatically sets `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8`
 
@@ -36,6 +40,7 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 | `bg_port_check(port)` | Check what's listening on a port (with tracked process correlation) |
 | `bg_port_kill(port)` | Kill whatever is listening on a port |
 | `bg_cleanup()` | Remove dead entries from registry |
+| `bg_status()` | Show dashboard URL, database path, and project info |
 
 ## Install
 
@@ -72,10 +77,23 @@ claude mcp add -s user bg-manager node /path/to/claude-code-bg-process-manager-w
 
 ## Storage
 
-- **Registry:** `.local/bg-processes.json` (in project root)
-- **Logs:** `.local/bg-logs/<name>.log`
+- **Database:** `~/.bg-manager/bg-manager.db` (SQLite, WAL mode)
+- **Logs:** `~/.bg-manager/logs/<project-slug>-<name>.log`
+- **Web UI:** `http://127.0.0.1:7890` (auto-increments if port is taken)
 
-Add `.local/` to your `.gitignore`.
+All data is centralized in `~/.bg-manager/` — shared across all projects. Legacy `.local/bg-processes.json` registries are automatically migrated on first run.
+
+## Web Dashboard
+
+The built-in web dashboard at `http://127.0.0.1:7890` provides:
+
+- **Live process list** grouped by project with ALIVE/DEAD status badges
+- **ANSI color log viewer** — terminal colors rendered in the browser
+- **SSE live updates** — process status and log streaming update in real-time
+- **Kill/cleanup actions** — manage processes directly from the browser
+- **Project filter** — focus on a specific project's processes
+
+The dashboard starts automatically when the MCP server launches. Use `bg_status` to get the actual URL (port may increment if 7890 is taken).
 
 ## CLAUDE.md Integration
 
@@ -84,7 +102,7 @@ Add the following to your project's `CLAUDE.md` (or global `~/.claude/CLAUDE.md`
 ```markdown
 ## Process Management — MANDATORY
 - **ALWAYS use `bg-manager` MCP tools** (`bg_run`, `bg_list`, `bg_kill`, `bg_logs`) for ALL background processes. NEVER use bash `&` or `run_in_background` directly.
-- `bg_run` automatically: captures PID, logs stdout/stderr to `.local/bg-logs/`, tracks metadata (intent, command, start time)
+- `bg_run` automatically: captures PID, logs stdout/stderr to `~/.bg-manager/logs/`, tracks metadata (intent, command, start time)
 - `bg_list` shows all tracked processes with alive/dead status — check what's running
 - `bg_kill <name>` kills by exact PID from registry — never kills unrelated processes
 - `bg_logs <name>` reads the log tail — use instead of `tail -f` on unknown files
@@ -168,8 +186,9 @@ Hooks are shell commands that Claude Code runs automatically in response to even
 ### Process spawning
 - Simple commands (no pipes/redirects) are spawned directly — PID is the actual process
 - Complex commands (with `&&`, `|`, `;`, etc.) spawn via Git Bash — PID is the bash wrapper
-- All output (stdout + stderr) is redirected to `.local/bg-logs/<name>.log`
+- All output (stdout + stderr) is redirected to `~/.bg-manager/logs/<project-slug>-<name>.log`
 - Python processes get `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` automatically
+- `FORCE_COLOR=1` is set to preserve ANSI color codes in log output
 
 ### Process killing (Windows)
 - Uses PowerShell `Stop-Process` with recursive tree kill — kills children first, then parent
@@ -180,6 +199,17 @@ Hooks are shell commands that Claude Code runs automatically in response to even
 - Uses `netstat -ano` — the only reliable method on Windows
 - Never uses `Get-NetTCPConnection` (hangs on some configs)
 - Correlates port PIDs with tracked processes by walking parent chain
+
+### Architecture
+
+```
+MCP Client (Claude) <--stdio--> bg-manager <--HTTP:7890--> Web Browser
+                                    |
+                                    v
+                           ~/.bg-manager/
+                             bg-manager.db   (SQLite, WAL mode)
+                             logs/           (per-process log files)
+```
 
 ## License
 
