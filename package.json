@@ -12,7 +12,7 @@
     "web/dist"
   ],
   "scripts": {
-    "build:web": "cd web && npm run build",
+    "build:web": "cd web && npm install --ignore-scripts && npm run build",
     "build:server": "tsc",
     "build": "npm run build:web && npm run build:server",
     "start": "node dist/index.js",

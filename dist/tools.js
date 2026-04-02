@@ -21,13 +21,19 @@ export function setProjectRoot(root) {
 // ── PTY spawn (hack for programs that need a real TTY for color output) ──
 function bgRunWithPty(name, command, intent, logFile, env) {
     const shellPath = findBashPath();
-    const ptyProcess = nodePty.spawn(shellPath, ["-c", command], {
-        name: "xterm-256color",
-        cols: 200,
-        rows: 50,
-        cwd: PROJECT_ROOT,
-        env: env,
-    });
+    let ptyProcess;
+    try {
+        ptyProcess = nodePty.spawn(shellPath, ["-c", command], {
+            name: "xterm-256color",
+            cols: 200,
+            rows: 50,
+            cwd: PROJECT_ROOT,
+            env: env,
+        });
+    }
+    catch (e) {
+        return `Error spawning PTY process: ${e.message}`;
+    }
     const logStream = createWriteStream(logFile, { flags: "w" });
     ptyProcess.onData((data) => {
         logStream.write(data);
@@ -64,9 +70,9 @@ export function bgRun(name, command, intent) {
         PYTHONIOENCODING: "utf-8",
         FORCE_COLOR: "1",
     };
-    // HACK: wippy.exe with -c needs a real TTY to emit ANSI colors.
+    // HACK: wippy.exe needs a real TTY to emit ANSI colors.
     // node-pty provides a ConPTY so the Go binary sees isatty()=true.
-    const needsPty = /wippy\b.*\s-c\b/.test(command);
+    const needsPty = /(?:^|[\\/\s])wippy(?:\.exe)?(?:\s|$)/.test(command);
     if (needsPty) {
         return bgRunWithPty(name, command, intent, logFile, spawnEnv);
     }
@@ -105,6 +111,7 @@ export function bgRun(name, command, intent) {
     if (!child.pid) {
         return `Error: process failed to start (no PID returned)`;
     }
+    child.on("error", () => { });
     child.unref();
     addProcess({
         name,
@@ -157,7 +164,13 @@ export function bgKill(name) {
     return `Killed "${name}" (PID ${entry.pid}) and removed from registry.`;
 }
 // ── bg_logs ──────────────────────────────────────────────────────
-export function bgLogs(name, lines = 50) {
+// Strip all ANSI escape sequences from text
+function stripAnsi(text) {
+    return text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
+        .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+        .replace(/\r(?!\n)/g, "");
+}
+export function bgLogs(name, lines = 50, raw = false, filter) {
     name = sanitizeName(name);
     lines = Math.max(1, Math.min(1000, lines));
     const entry = getProcess(PROJECT, name);
@@ -191,9 +204,27 @@ export function bgLogs(name, lines = 50) {
         else {
             content = readFileSync(entry.log_file, "utf-8");
         }
-        const allLines = content.split("\n");
-        const tail = allLines.slice(-lines).join("\n");
-        return `[${entry.name}] (PID ${entry.pid}, ${status}, ${sizeMB}MB) — last ${lines} lines:\n\n${tail}`;
+        let allLines = content.split("\n");
+        // Apply filter(s) — match against stripped text so ANSI codes don't interfere
+        if (filter) {
+            const patterns = Array.isArray(filter) ? filter : [filter];
+            const lowerPatterns = patterns.filter(p => p.length > 0).map(p => p.toLowerCase());
+            if (lowerPatterns.length > 0) {
+                allLines = allLines.filter(line => {
+                    const plain = stripAnsi(line).toLowerCase();
+                    return lowerPatterns.some(p => plain.includes(p));
+                });
+            }
+        }
+        let tail = allLines.slice(-lines).join("\n");
+        // Strip ANSI by default (raw=true preserves them)
+        if (!raw) {
+            tail = stripAnsi(tail);
+        }
+        const filterNote = filter
+            ? ` [filter: ${Array.isArray(filter) ? filter.join(", ") : filter}]`
+            : "";
+        return `[${entry.name}] (PID ${entry.pid}, ${status}, ${sizeMB}MB) — last ${lines} lines${filterNote}:\n\n${tail}`;
     }
     catch (e) {
         return `Error reading log: ${e.message}`;

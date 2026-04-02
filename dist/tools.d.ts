@@ -9,7 +9,7 @@ export declare function setProjectRoot(root: string): void;
 export declare function bgRun(name: string, command: string, intent: string): string;
 export declare function bgList(): string;
 export declare function bgKill(name: string): string;
-export declare function bgLogs(name: string, lines?: number): string;
+export declare function bgLogs(name: string, lines?: number, raw?: boolean, filter?: string | string[]): string;
 export declare function bgPortCheck(port: number): string;
 export declare function bgPortKill(port: number): string;
 export declare function bgCleanup(): string;

@@ -53,14 +53,5 @@ export function useProcesses() {
     sse = null
   })
 
-  async function removeProcess(project: string, name: string) {
-    try {
-      await fetch(
-        `${API_BASE}/api/processes/${encodeURIComponent(project)}/${encodeURIComponent(name)}/kill`,
-        { method: 'POST' },
-      )
-    } catch { /* server may be down */ }
-  }
-
-  return { processes, connected, killProcess, removeProcess, cleanup }
+  return { processes, connected, killProcess, cleanup }
 }

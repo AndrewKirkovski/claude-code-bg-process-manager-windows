@@ -6,7 +6,7 @@ import ProcessList from './components/ProcessList.vue'
 import LogViewer from './components/LogViewer.vue'
 import { useProcesses } from './composables/useProcesses'
 
-const { processes, connected, killProcess, removeProcess, cleanup } = useProcesses()
+const { processes, connected, killProcess, cleanup } = useProcesses()
 
 const selected = ref<{ project: string; name: string } | null>(null)
 const projectFilter = ref('')
@@ -42,7 +42,7 @@ async function onKill(project: string, name: string) {
         :selected="selected"
         @select="onSelect"
         @kill="onKill"
-        @remove="removeProcess"
+        @remove="killProcess"
       />
       <LogViewer
         :selected="selected"

@@ -118,7 +118,7 @@ function handleRequest(req, res, port) {
                 return sendJson(res, 404, { error: "Process not found" });
             if (!existsSync(entry.log_file))
                 return sendJson(res, 404, { error: "Log file not found" });
-            const lines = parseInt(url.searchParams.get("lines") ?? "200", 10);
+            const lines = parseInt(url.searchParams.get("lines") ?? "200", 10) || 200;
             const clampedLines = Math.max(1, Math.min(5000, lines));
             try {
                 const content = readLogTail(entry.log_file, clampedLines);
@@ -267,6 +267,7 @@ export function startHttpServer(preferredPort) {
             srv.listen(port, "127.0.0.1", () => {
                 // Remove stale error listener and assign after successful bind
                 srv.removeListener("error", onError);
+                srv.on("error", (err) => { process.stderr.write(`bg-manager HTTP error: ${err.message}\n`); });
                 httpServer = srv;
                 pollInterval = setInterval(broadcastProcessList, 2000);
                 pollInterval.unref();

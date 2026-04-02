@@ -2,74 +2,91 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ── Theme tokens ── */
+/* ── Theme tokens — Bluloco Light ── */
 @theme {
-  --color-surface: #ffffff;
-  --color-surface-2: #f6f8fa;
-  --color-surface-3: #eaeef2;
-  --color-border: #d0d7de;
-  --color-primary: #1f2328;
-  --color-secondary: #656d76;
-  --color-alive: #1a7f37;
-  --color-dead: #cf222e;
-  --color-accent: #0969da;
-  --color-accent-subtle: rgba(9, 105, 218, 0.1);
-  --color-alive-subtle: rgba(26, 127, 55, 0.12);
-  --color-dead-subtle: rgba(207, 34, 46, 0.12);
+  --color-surface: #f9f9f9;
+  --color-surface-2: #f1f1f1;
+  --color-surface-3: #e8e8e8;
+  --color-border: #d5d7d8;
+  --color-primary: #383a42;
+  --color-secondary: #a0a1a7;
+  --color-alive: #239749;
+  --color-dead: #d52652;
+  --color-accent: #275fe4;
+  --color-accent-subtle: rgba(39, 95, 228, 0.1);
+  --color-alive-subtle: rgba(35, 151, 73, 0.12);
+  --color-dead-subtle: rgba(213, 38, 82, 0.12);
 }
 
-/* Dark overrides via CSS custom properties */
+/* ── Theme tokens — OneDark Pro ── */
 .dark {
-  --color-surface: #0d1117;
-  --color-surface-2: #161b22;
-  --color-surface-3: #21262d;
-  --color-border: #30363d;
-  --color-primary: #e6edf3;
-  --color-secondary: #8b949e;
-  --color-alive: #3fb950;
-  --color-dead: #f85149;
-  --color-accent: #58a6ff;
-  --color-accent-subtle: rgba(88, 166, 255, 0.1);
-  --color-alive-subtle: rgba(63, 185, 80, 0.15);
-  --color-dead-subtle: rgba(248, 81, 73, 0.15);
+  --color-surface: #282c34;
+  --color-surface-2: #21252b;
+  --color-surface-3: #2c313c;
+  --color-border: #3e4452;
+  --color-primary: #abb2bf;
+  --color-secondary: #6b717d;
+  --color-alive: #8cc265;
+  --color-dead: #e05561;
+  --color-accent: #4aa5f0;
+  --color-accent-subtle: rgba(74, 165, 240, 0.12);
+  --color-alive-subtle: rgba(140, 194, 101, 0.15);
+  --color-dead-subtle: rgba(224, 85, 97, 0.15);
 }
 
-/* ── ANSI color tokens (named colors from terminal palette) ── */
+/* ── ANSI color tokens — Bluloco Light ── */
 :root {
-  --ansi-black: #1f2328;
-  --ansi-red: #cf222e;
-  --ansi-green: #116329;
-  --ansi-yellow: #9a6700;
-  --ansi-blue: #0550ae;
-  --ansi-magenta: #8250df;
-  --ansi-cyan: #1b7c83;
-  --ansi-white: #6e7781;
-  --ansi-bright-black: #656d76;
-  --ansi-bright-red: #a40e26;
-  --ansi-bright-green: #1a7f37;
-  --ansi-bright-yellow: #bf8700;
-  --ansi-bright-blue: #0969da;
-  --ansi-bright-magenta: #6639ba;
-  --ansi-bright-cyan: #3192aa;
-  --ansi-bright-white: #1f2328;
+  --ansi-black: #373a41;
+  --ansi-red: #d52652;
+  --ansi-green: #239749;
+  --ansi-yellow: #df621b;
+  --ansi-blue: #275fe4;
+  --ansi-magenta: #823ef0;
+  --ansi-cyan: #26608c;
+  --ansi-white: #b9bac1;
+  --ansi-bright-black: #676a77;
+  --ansi-bright-red: #ff637f;
+  --ansi-bright-green: #3cbc66;
+  --ansi-bright-yellow: #c5a231;
+  --ansi-bright-blue: #0099e0;
+  --ansi-bright-magenta: #ce32c0;
+  --ansi-bright-cyan: #6d92ba;
+  --ansi-bright-white: #d3d3d3;
 }
+/* ── ANSI color tokens — OneDark Pro ── */
 .dark {
-  --ansi-black: #4d4d4c;
-  --ansi-red: #c82829;
-  --ansi-green: #718c00;
-  --ansi-yellow: #eab700;
-  --ansi-blue: #4271ae;
-  --ansi-magenta: #8959a8;
-  --ansi-cyan: #3e999f;
-  --ansi-white: #d6d6d6;
-  --ansi-bright-black: #636c76;
-  --ansi-bright-red: #f85149;
-  --ansi-bright-green: #3fb950;
-  --ansi-bright-yellow: #d29922;
-  --ansi-bright-blue: #58a6ff;
-  --ansi-bright-magenta: #bc8cff;
-  --ansi-bright-cyan: #39c5cf;
-  --ansi-bright-white: #ffffff;
+  --ansi-black: #3f4451;
+  --ansi-red: #e05561;
+  --ansi-green: #8cc265;
+  --ansi-yellow: #d18f52;
+  --ansi-blue: #4aa5f0;
+  --ansi-magenta: #c162de;
+  --ansi-cyan: #42b3c2;
+  --ansi-white: #d7dae0;
+  --ansi-bright-black: #4f5666;
+  --ansi-bright-red: #ff616e;
+  --ansi-bright-green: #a5e075;
+  --ansi-bright-yellow: #f0a45d;
+  --ansi-bright-blue: #4dc4ff;
+  --ansi-bright-magenta: #de73ff;
+  --ansi-bright-cyan: #4cd1e0;
+  --ansi-bright-white: #e6e6e6;
+}
+
+/* ── Fira Mono (embedded woff2) ── */
+@font-face {
+  font-family: 'Fira Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/FiraMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fira Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./assets/FiraMono-Bold.woff2') format('woff2');
 }
 
 /* ── Base styles ── */
@@ -79,5 +96,5 @@ body {
 
 /* ── Log viewer monospace ── */
 .log-font {
-  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  font-family: 'Fira Mono', Consolas, monospace;
 }

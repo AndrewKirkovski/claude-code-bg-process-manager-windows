@@ -5,5 +5,7 @@ node_modules/
 *.db-shm
 
 .idea/
+.claude/
+.playwright-mcp/
 web/node_modules/
 web/dist/

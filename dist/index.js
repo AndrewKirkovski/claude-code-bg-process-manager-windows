@@ -8,7 +8,7 @@
  *   bg_run(name, command, intent)  — spawn a background process with auto-logging
  *   bg_list()                       — list all tracked processes with status
  *   bg_kill(name)                   — kill a tracked process by name
- *   bg_logs(name, lines?)           — read last N lines from a process log
+ *   bg_logs(name, lines?, raw?, filter?) — read last N lines from a process log
  *   bg_port_check(port)             — check what's listening on a port
  *   bg_port_kill(port)              — kill whatever is listening on a port
  *   bg_cleanup()                    — remove dead entries from registry
@@ -77,7 +77,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         {
             name: "bg_logs",
-            description: "Read the last N lines from a background process's log file.",
+            description: "Read the last N lines from a background process's log file. " +
+                "ANSI color codes are stripped by default; set raw=true to preserve them. " +
+                "Use filter to show only lines matching one or more search strings.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -88,6 +90,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                     lines: {
                         type: "number",
                         description: "Number of lines to return (default: 50)",
+                    },
+                    raw: {
+                        type: "boolean",
+                        description: "If true, preserve ANSI color codes in output. Default: false (stripped).",
+                    },
+                    filter: {
+                        oneOf: [
+                            { type: "string" },
+                            { type: "array", items: { type: "string" } },
+                        ],
+                        description: "Show only lines containing this string (or any of these strings). Case-insensitive. Matching is done against stripped text.",
                     },
                 },
                 required: ["name"],
@@ -147,7 +160,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             result = bgKill(args.name);
             break;
         case "bg_logs":
-            result = bgLogs(args.name, args.lines ?? 50);
+            result = bgLogs(args.name, args.lines ?? 50, args.raw ?? false, args.filter);
             break;
         case "bg_port_check":
             result = bgPortCheck(args.port);
