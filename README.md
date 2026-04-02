@@ -135,7 +135,6 @@ This is important because without these instructions, Claude Code will default t
 - Simple commands (no pipes/redirects) are spawned directly — PID is the actual process
 - Complex commands (with `&&`, `|`, `;`, etc.) spawn via Git Bash — PID is the bash wrapper
 - All output (stdout + stderr) is redirected to `~/.bg-manager/logs/<project-slug>-<name>.log`
-- Programs needing color output (e.g. wippy.exe) are spawned via node-pty for `isatty()=true`
 - Python processes get `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` automatically
 - `FORCE_COLOR=1` is set to preserve ANSI color codes in log output
 
