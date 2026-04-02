@@ -7,8 +7,9 @@
  */
 
 import { spawn, execSync } from "child_process";
-import { existsSync, statSync, openSync, readSync, closeSync, readFileSync } from "fs";
+import { existsSync, statSync, openSync, readSync, closeSync, readFileSync, createWriteStream } from "fs";
 import { join } from "path";
+import * as nodePty from "node-pty";
 import {
   isAlive, sanitizeName, parseSimpleCommand, findBashPath,
   parseNetstat, findTrackedEntry, killProcessTree,
@@ -27,6 +28,45 @@ export function setProjectRoot(root: string): void {
   PROJECT = normalizeProject(root);
 }
 
+
+// ── PTY spawn (hack for programs that need a real TTY for color output) ──
+
+function bgRunWithPty(
+  name: string, command: string, intent: string,
+  logFile: string, env: Record<string, string | undefined>,
+): string {
+  const shellPath = findBashPath();
+  const ptyProcess = nodePty.spawn(shellPath, ["-c", command], {
+    name: "xterm-256color",
+    cols: 200,
+    rows: 50,
+    cwd: PROJECT_ROOT,
+    env: env as Record<string, string>,
+  });
+
+  const logStream = createWriteStream(logFile, { flags: "w" });
+  ptyProcess.onData((data: string) => {
+    logStream.write(data);
+  });
+  ptyProcess.onExit(() => {
+    logStream.end();
+  });
+
+  const pid = ptyProcess.pid;
+
+  addProcess({
+    name,
+    project: PROJECT,
+    pid,
+    command,
+    intent,
+    log_file: logFile,
+    started_at: new Date().toISOString(),
+    cwd: PROJECT_ROOT,
+  });
+
+  return `Started "${name}" (PID ${pid}, via pty)\n  Command: ${command}\n  Intent: ${intent}\n  Log: ${logFile}`;
+}
 
 // ── bg_run ───────────────────────────────────────────────────────
 
@@ -48,6 +88,14 @@ export function bgRun(name: string, command: string, intent: string): string {
     PYTHONIOENCODING: "utf-8",
     FORCE_COLOR: "1",
   };
+
+  // HACK: wippy.exe with -c needs a real TTY to emit ANSI colors.
+  // node-pty provides a ConPTY so the Go binary sees isatty()=true.
+  const needsPty = /wippy\b.*\s-c\b/.test(command);
+
+  if (needsPty) {
+    return bgRunWithPty(name, command, intent, logFile, spawnEnv);
+  }
 
   let child;
   let spawnMode: "direct" | "shell";

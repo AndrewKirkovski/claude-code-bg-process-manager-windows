@@ -5,9 +5,22 @@
  */
 import http from "http";
 import { statSync, openSync, readSync, closeSync, readFileSync, watchFile, unwatchFile, existsSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { getAllProcesses, withStatus, getProcess, cleanupAllDead, removeProcess } from "./db.js";
 import { isAlive, killProcessTree } from "./process-utils.js";
-import { getUiHtml } from "./ui.js";
+// ── Dashboard HTML ──────────────────────────────────────────────
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const htmlPath = join(__dirname, "..", "web", "dist", "index.html");
+const fallbackHtml = `<!DOCTYPE html><html><body><p>Dashboard not built. Run <code>cd web &amp;&amp; npm run build</code> first.</p></body></html>`;
+function getDashboardHtml() {
+    try {
+        return readFileSync(htmlPath, "utf-8");
+    }
+    catch {
+        return fallbackHtml;
+    }
+}
 // ── SSE client tracking ──────────────────────────────────────────
 const sseClients = new Set();
 let previousState = new Map();
@@ -56,7 +69,7 @@ function handleRequest(req, res, port) {
     // Dashboard
     if (method === "GET" && path === "/") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(getUiHtml(port));
+        res.end(getDashboardHtml().replace(/__BG_MANAGER_PORT__/g, String(port)));
         return;
     }
     // API: all processes with status

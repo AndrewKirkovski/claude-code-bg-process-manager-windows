@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Theme tokens ── */
+@theme {
+  --color-surface: #ffffff;
+  --color-surface-2: #f6f8fa;
+  --color-surface-3: #eaeef2;
+  --color-border: #d0d7de;
+  --color-primary: #1f2328;
+  --color-secondary: #656d76;
+  --color-alive: #1a7f37;
+  --color-dead: #cf222e;
+  --color-accent: #0969da;
+  --color-accent-subtle: rgba(9, 105, 218, 0.1);
+  --color-alive-subtle: rgba(26, 127, 55, 0.12);
+  --color-dead-subtle: rgba(207, 34, 46, 0.12);
+}
+
+/* Dark overrides via CSS custom properties */
+.dark {
+  --color-surface: #0d1117;
+  --color-surface-2: #161b22;
+  --color-surface-3: #21262d;
+  --color-border: #30363d;
+  --color-primary: #e6edf3;
+  --color-secondary: #8b949e;
+  --color-alive: #3fb950;
+  --color-dead: #f85149;
+  --color-accent: #58a6ff;
+  --color-accent-subtle: rgba(88, 166, 255, 0.1);
+  --color-alive-subtle: rgba(63, 185, 80, 0.15);
+  --color-dead-subtle: rgba(248, 81, 73, 0.15);
+}
+
+/* ── ANSI color tokens (named colors from terminal palette) ── */
+:root {
+  --ansi-black: #1f2328;
+  --ansi-red: #cf222e;
+  --ansi-green: #116329;
+  --ansi-yellow: #9a6700;
+  --ansi-blue: #0550ae;
+  --ansi-magenta: #8250df;
+  --ansi-cyan: #1b7c83;
+  --ansi-white: #6e7781;
+  --ansi-bright-black: #656d76;
+  --ansi-bright-red: #a40e26;
+  --ansi-bright-green: #1a7f37;
+  --ansi-bright-yellow: #bf8700;
+  --ansi-bright-blue: #0969da;
+  --ansi-bright-magenta: #6639ba;
+  --ansi-bright-cyan: #3192aa;
+  --ansi-bright-white: #1f2328;
+}
+.dark {
+  --ansi-black: #4d4d4c;
+  --ansi-red: #c82829;
+  --ansi-green: #718c00;
+  --ansi-yellow: #eab700;
+  --ansi-blue: #4271ae;
+  --ansi-magenta: #8959a8;
+  --ansi-cyan: #3e999f;
+  --ansi-white: #d6d6d6;
+  --ansi-bright-black: #636c76;
+  --ansi-bright-red: #f85149;
+  --ansi-bright-green: #3fb950;
+  --ansi-bright-yellow: #d29922;
+  --ansi-bright-blue: #58a6ff;
+  --ansi-bright-magenta: #bc8cff;
+  --ansi-bright-cyan: #39c5cf;
+  --ansi-bright-white: #ffffff;
+}
+
+/* ── Base styles ── */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+/* ── Log viewer monospace ── */
+.log-font {
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+}
