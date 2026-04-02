@@ -18,8 +18,9 @@ export function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (e: any) {
+    // EPERM means the process exists but we lack permission — still alive
+    return e.code === 'EPERM';
   }
 }
 
