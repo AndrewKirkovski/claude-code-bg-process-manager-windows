@@ -37,10 +37,16 @@ const server = new Server(
   {
     capabilities: { tools: {} },
     instructions:
-      "Background process manager with a live web dashboard. " +
-      "Dashboard URL: http://127.0.0.1:7890 (port may increment if taken — use bg_status to get the actual URL). " +
-      "ALWAYS use bg_run instead of bash '&' or run_in_background. " +
-      "BEFORE starting any process, run bg_list to check what's already running.",
+      "Background process manager for Windows with a live web dashboard.\n" +
+      "Dashboard: http://127.0.0.1:7890 (port may increment — use bg_status for actual URL).\n" +
+      "ALWAYS use bg_run instead of bash '&' or run_in_background.\n" +
+      "BEFORE starting any process, run bg_list to check what's already running.\n\n" +
+      "AGENT NOTES (Windows execution environment):\n" +
+      "- Env vars come from the IDE that spawned bg-manager (VSCODE_*, CURSOR_*, ELECTRON_*, etc.), NOT the user's interactive terminal. PATH may differ.\n" +
+      "- bg-manager NEVER uses cmd.exe or COMSPEC. Simple commands (e.g. 'node server.js') spawn directly with no shell. Complex commands (|, &, ;, >) spawn via Git Bash.\n" +
+      "- Logs capture stdout/stderr only. Empty logs = process printed nothing (wrong path, immediate crash, or output buffered). Check ALIVE/DEAD status.\n" +
+      "- DEAD = process exited (success or failure). Short tasks go DEAD quickly — that's normal.\n" +
+      "- Smoke test: bg_run(name='probe', command='node -e \"console.log(42)\"', intent='env check') — shell builtins like echo need metacharacters to trigger bash (e.g. 'echo hi && echo done').",
   }
 );
 
@@ -49,18 +55,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "bg_run",
       description:
-        "Start a background process with automatic logging and PID tracking. " +
-        "ALWAYS use this instead of bash '&' or run_in_background for any background task.",
+        "Start a background process with automatic logging and PID tracking.\n" +
+        "- ALWAYS use this instead of bash '&' or run_in_background.\n" +
+        "- Simple commands (no pipes/redirects) spawn directly. Complex commands (with |, &, ;, >) spawn via Git Bash.\n" +
+        "- Inherits IDE extension host env, not the user's terminal session.\n" +
+        "- Logs capture stdout/stderr. Empty logs = nothing printed (wrong path, immediate crash, or buffered output).\n" +
+        "- DEAD = process exited (success or failure). Short-lived commands go DEAD quickly — that's normal, check logs.\n" +
+        "- Shell builtins (echo, cd) fail in direct mode — add a metachar to trigger bash: 'echo hi && echo done'.\n" +
+        "- Smoke test: bg_run(name='probe', command='node -e \"console.log(42)\"', intent='test')",
       inputSchema: {
         type: "object" as const,
         properties: {
           name: {
             type: "string",
-            description: "Short unique name for this process (e.g., 'scraper', 'training', 'server')",
+            description: "Short unique name for this process (e.g., 'server', 'build', 'probe')",
           },
           command: {
             type: "string",
-            description: "The shell command to run (e.g., 'python training/scrape.py --count 8000')",
+            description: "Command to run. Simple commands spawn directly (e.g. 'node server.js'). Shell metacharacters (|, &, ;, >) trigger Git Bash. Avoid complex quoting — use scripts for elaborate pipelines.",
           },
           intent: {
             type: "string",
@@ -72,7 +84,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "bg_list",
-      description: "List all tracked background processes with their status (alive/dead), PID, command, intent, and log file path.",
+      description:
+        "List all tracked processes with status (ALIVE/DEAD), PID, command, intent, log path.\n" +
+        "- ALIVE = process still running. DEAD = exited (may have succeeded or failed).\n" +
+        "- Short-lived commands (builds, probes) go DEAD quickly — check bg_logs for output.",
       inputSchema: { type: "object" as const, properties: {} },
     },
     {
@@ -92,9 +107,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "bg_logs",
       description:
-        "Read the last N lines from a background process's log file. " +
-        "ANSI color codes are stripped by default; set raw=true to preserve them. " +
-        "Use filter to show only lines matching one or more search strings.",
+        "Read the last N lines from a process log file.\n" +
+        "- ANSI color codes stripped by default; raw=true preserves them.\n" +
+        "- Empty output = process printed nothing to stdout/stderr (check quoting, buffering, or if process exited immediately).\n" +
+        "- Use filter to search for specific strings in the output.",
       inputSchema: {
         type: "object" as const,
         properties: {

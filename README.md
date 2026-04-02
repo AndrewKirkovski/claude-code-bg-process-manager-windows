@@ -2,7 +2,7 @@
 
 MCP server for managing background processes in [Claude Code](https://claude.ai/code) on Windows.
 
-[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=bg-manager&config=eyJjb21tYW5kIjoiY21kIC9jIG5weCAteSBnaXRodWI6QW5kcmV3S2lya292c2tpL2NsYXVkZS1jb2RlLWJnLXByb2Nlc3MtbWFuYWdlci13aW5kb3dzIn0%3D)
+[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](cursor://anysphere.cursor-deeplink/mcp/install?name=bg-manager&config=eyJjb21tYW5kIjoiY21kIC9jIG5weCAteSBnaXRodWI6QW5kcmV3S2lya292c2tpL2NsYXVkZS1jb2RlLWJnLXByb2Nlc3MtbWFuYWdlci13aW5kb3dzIn0%3D)
 
 ![bg-manager dashboard](screenshot.png)
 
@@ -50,7 +50,7 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 
 Click the badge at the top of this README, or use the button below:
 
-[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=bg-manager&config=eyJjb21tYW5kIjoiY21kIC9jIG5weCAteSBnaXRodWI6QW5kcmV3S2lya292c2tpL2NsYXVkZS1jb2RlLWJnLXByb2Nlc3MtbWFuYWdlci13aW5kb3dzIn0%3D)
+[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](cursor://anysphere.cursor-deeplink/mcp/install?name=bg-manager&config=eyJjb21tYW5kIjoiY21kIC9jIG5weCAteSBnaXRodWI6QW5kcmV3S2lya292c2tpL2NsYXVkZS1jb2RlLWJnLXByb2Nlc3MtbWFuYWdlci13aW5kb3dzIn0%3D)
 
 ### Claude Code
 
@@ -109,6 +109,17 @@ The built-in web dashboard at `http://127.0.0.1:7890` provides:
 - **Hash routing** — direct links to processes via `/#/:project/:name`
 
 The dashboard starts automatically when the MCP server launches. Use `bg_status` to get the actual URL (port may increment if 7890 is taken).
+
+## Agent Notes
+
+If you're an AI agent using this MCP server, here's what to expect:
+
+- **Execution environment** — env vars come from the IDE that spawned bg-manager (VSCODE_*, CURSOR_*, ELECTRON_*, etc.), not the user's interactive terminal. PATH may differ from what the user sees in their shell.
+- **Spawn behavior** — bg-manager never uses cmd.exe or COMSPEC. Simple commands (e.g. `node server.js`, `python app.py`) spawn directly with no shell. Commands containing shell metacharacters (`|`, `&`, `;`, `>`) spawn via Git Bash (`bash -c '...'`).
+- **Log contents** — logs only contain stdout/stderr from the spawned process. Empty logs mean the process produced no output (wrong path, immediate crash, buffered output, or bad quoting).
+- **ALIVE vs DEAD** — DEAD means the process exited, not necessarily that it failed. Short-lived commands (builds, probes, one-shot scripts) go DEAD as soon as they complete. Check `bg_logs` for the actual output.
+- **Shell builtins** — `echo`, `cd`, etc. are not executables on Windows. Direct spawn fails for bare `echo hello`. Add a metacharacter to trigger Git Bash: `echo hello && echo done`, or use an actual executable: `node -e "console.log('hello')"`.
+- **Smoke test** — to verify bg-manager works: `bg_run(name='probe', command='node -e "console.log(42)"', intent='test')` then `bg_logs(name='probe')`. Should show `42`.
 
 ## CLAUDE.md Integration
 
