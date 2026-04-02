@@ -6,15 +6,28 @@
 
 import http from "http";
 import { statSync, openSync, readSync, closeSync, readFileSync, watchFile, unwatchFile, existsSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, extname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { getAllProcesses, withStatus, getProcess, cleanupAllDead, removeProcess } from "./db.js";
 import { isAlive, killProcessTree } from "./process-utils.js";
 
-// ── Dashboard HTML ──────────────────────────────────────────────
+// ── Dashboard static files ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const htmlPath = join(__dirname, "..", "web", "dist", "index.html");
+const webDistDir = resolve(join(__dirname, "..", "web", "dist"));
+const htmlPath = join(webDistDir, "index.html");
 const fallbackHtml = `<!DOCTYPE html><html><body><p>Dashboard not built. Run <code>cd web &amp;&amp; npm run build</code> first.</p></body></html>`;
+
+const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js":   "application/javascript; charset=utf-8",
+  ".css":  "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".ttf":  "font/ttf",
+  ".svg":  "image/svg+xml",
+  ".png":  "image/png",
+};
 
 function getDashboardHtml(): string {
   try {
@@ -63,15 +76,18 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
   res.end(JSON.stringify(data));
 }
 
-function handleRequest(req: http.IncomingMessage, res: http.ServerResponse, port: number): void {
-  const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
+function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const url = new URL(req.url ?? "/", `http://127.0.0.1`);
   const path = url.pathname;
   const method = req.method ?? "GET";
 
   // Dashboard
   if (method === "GET" && path === "/") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(getDashboardHtml().replace(/__BG_MANAGER_PORT__/g, String(port)));
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache",
+    });
+    res.end(getDashboardHtml());
     return;
   }
 
@@ -159,6 +175,30 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse, port
       // Broadcast update
       setTimeout(broadcastProcessList, 200);
       return;
+    }
+  }
+
+  // Static assets from web/dist/
+  if (method === "GET") {
+    const safePath = path.replace(/\.\./g, "");
+    const filePath = resolve(join(webDistDir, safePath));
+
+    if (filePath.startsWith(webDistDir) && existsSync(filePath)) {
+      try {
+        const stat = statSync(filePath);
+        if (stat.isFile()) {
+          const ext = extname(filePath);
+          const contentType = MIME_TYPES[ext] || "application/octet-stream";
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=31536000, immutable",
+          });
+          res.end(readFileSync(filePath));
+          return;
+        }
+      } catch {
+        // Fall through to 404
+      }
     }
   }
 
@@ -263,13 +303,11 @@ export function startHttpServer(preferredPort?: number): Promise<number> {
   const basePort = preferredPort ?? parseInt(process.env.BG_MANAGER_PORT ?? "7890", 10);
 
   return new Promise((resolve, reject) => {
-    let chosenPort = basePort;
     let attempts = 0;
 
-    const srv = http.createServer((req, res) => handleRequest(req, res, chosenPort));
+    const srv = http.createServer((req, res) => handleRequest(req, res));
 
     function tryBind(port: number): void {
-      chosenPort = port;
 
       const onError = (err: NodeJS.ErrnoException) => {
         if (err.code === "EADDRINUSE" && attempts < 10) {

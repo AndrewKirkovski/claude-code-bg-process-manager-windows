@@ -15,7 +15,7 @@ export function useProcesses() {
     sse = new EventSource(`${API_BASE}/api/sse`)
 
     sse.addEventListener('process_list', (e) => {
-      processes.value = JSON.parse((e as MessageEvent).data)
+      try { processes.value = JSON.parse((e as MessageEvent).data) } catch { /* malformed SSE */ }
     })
 
     sse.onopen = () => { connected.value = true }

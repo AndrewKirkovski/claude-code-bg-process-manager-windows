@@ -40,7 +40,7 @@ function bgRunWithPty(
   try {
     ptyProcess = nodePty.spawn(shellPath, ["-c", command], {
       name: "xterm-256color",
-      cols: 200,
+      cols: 10000,
       rows: 50,
       cwd: PROJECT_ROOT,
       env: env as Record<string, string>,

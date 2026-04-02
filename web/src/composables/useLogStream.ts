@@ -1,13 +1,11 @@
 import { watch, onUnmounted, type Ref } from 'vue'
 import { API_BASE } from '@/api'
-import { useAnsiRenderer } from './useAnsiRenderer'
 
 export function useLogStream(
   selected: Ref<{ project: string; name: string } | null>,
-  logContent: Ref<{ setContent: (h: string) => void; appendChunk: (h: string) => void; scrollToBottom: () => void } | null>,
+  logContent: Ref<{ write: (data: string) => void; clear: () => void; scrollToBottom: () => void } | null>,
   autoScroll: Ref<boolean>,
 ) {
-  const { renderToHtml, resetParser } = useAnsiRenderer()
   let logSSE: EventSource | null = null
   let abortController: AbortController | null = null
 
@@ -18,12 +16,11 @@ export function useLogStream(
 
   watch(selected, async (sel) => {
     closeStream()
-    resetParser()
 
     if (!sel || !logContent.value) return
 
     const lc = logContent.value
-    lc.setContent('<span style="color:var(--color-secondary)">Loading...</span>')
+    lc.clear()
 
     // Abort-safe fetch for initial logs
     abortController = new AbortController()
@@ -38,27 +35,26 @@ export function useLogStream(
       // Verify selection hasn't changed during fetch
       if (selected.value?.project !== sel.project || selected.value?.name !== sel.name) return
 
-      lc.setContent(renderToHtml(data.content || ''))
+      lc.write(data.content || '')
       if (autoScroll.value) lc.scrollToBottom()
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return
-      lc.setContent('<span style="color:var(--color-dead)">Failed to load logs</span>')
+      lc.write('\x1b[31mFailed to load logs\x1b[0m\r\n')
       return
     }
 
-    // Start streaming — parser keeps ANSI state from initial load (no second reset)
+    // Start streaming
     const streamUrl = `${API_BASE}/api/processes/${encodeURIComponent(sel.project)}/${encodeURIComponent(sel.name)}/logs/stream`
     logSSE = new EventSource(streamUrl)
 
     logSSE.onmessage = (e) => {
-      // Guard against stale stream delivering to wrong selection
       if (selected.value?.project !== sel.project || selected.value?.name !== sel.name) {
         logSSE?.close()
         return
       }
-      const text = JSON.parse(e.data) as string
-      const html = renderToHtml(text)
-      logContent.value?.appendChunk(html)
+      let text: string
+      try { text = JSON.parse(e.data) } catch { return }
+      logContent.value?.write(text)
       if (autoScroll.value) logContent.value?.scrollToBottom()
     }
 

@@ -34,46 +34,7 @@
   --color-dead-subtle: rgba(224, 85, 97, 0.15);
 }
 
-/* ── ANSI color tokens — Bluloco Light ── */
-:root {
-  --ansi-black: #373a41;
-  --ansi-red: #d52652;
-  --ansi-green: #239749;
-  --ansi-yellow: #df621b;
-  --ansi-blue: #275fe4;
-  --ansi-magenta: #823ef0;
-  --ansi-cyan: #26608c;
-  --ansi-white: #b9bac1;
-  --ansi-bright-black: #676a77;
-  --ansi-bright-red: #ff637f;
-  --ansi-bright-green: #3cbc66;
-  --ansi-bright-yellow: #c5a231;
-  --ansi-bright-blue: #0099e0;
-  --ansi-bright-magenta: #ce32c0;
-  --ansi-bright-cyan: #6d92ba;
-  --ansi-bright-white: #d3d3d3;
-}
-/* ── ANSI color tokens — OneDark Pro ── */
-.dark {
-  --ansi-black: #3f4451;
-  --ansi-red: #e05561;
-  --ansi-green: #8cc265;
-  --ansi-yellow: #d18f52;
-  --ansi-blue: #4aa5f0;
-  --ansi-magenta: #c162de;
-  --ansi-cyan: #42b3c2;
-  --ansi-white: #d7dae0;
-  --ansi-bright-black: #4f5666;
-  --ansi-bright-red: #ff616e;
-  --ansi-bright-green: #a5e075;
-  --ansi-bright-yellow: #f0a45d;
-  --ansi-bright-blue: #4dc4ff;
-  --ansi-bright-magenta: #de73ff;
-  --ansi-bright-cyan: #4cd1e0;
-  --ansi-bright-white: #e6e6e6;
-}
-
-/* ── Fira Mono (embedded woff2) ── */
+/* ── Fira Mono (served as static assets) ── */
 @font-face {
   font-family: 'Fira Mono';
   font-style: normal;
@@ -94,7 +55,30 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 
-/* ── Log viewer monospace ── */
-.log-font {
-  font-family: 'Fira Mono', Consolas, monospace;
+/* ── xterm light mode: invert luminosity, restore hues ── */
+.xterm-screen {
+  transition: filter 0.15s ease;
+}
+:root:not(.dark) .xterm-screen {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* ── xterm transparent bg (container handles background) ── */
+.xterm-viewport {
+  background-color: transparent !important;
+}
+
+/* ── xterm scrollbar ── */
+.xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--color-secondary);
+  border-radius: 3px;
+}
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
 }
