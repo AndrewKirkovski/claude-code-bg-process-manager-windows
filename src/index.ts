@@ -48,7 +48,12 @@ const server = new Server(
       "- bg-manager NEVER uses cmd.exe or COMSPEC. Simple commands (e.g. 'node server.js') spawn directly with no shell. Complex commands (|, &, ;, >) spawn via Git Bash.\n" +
       "- Logs capture stdout/stderr only. Empty logs = process printed nothing (wrong path, immediate crash, or output buffered). Check ALIVE/DEAD status.\n" +
       "- DEAD = process exited (success or failure). Short tasks go DEAD quickly — that's normal.\n" +
-      "- Smoke test: bg_run(name='probe', command='node -e \"console.log(42)\"', intent='env check') — shell builtins like echo need metacharacters to trigger bash (e.g. 'echo hi && echo done').",
+      "- Smoke test: bg_run(name='probe', command='node -e \"console.log(42)\"', intent='env check') — shell builtins like echo need metacharacters to trigger bash (e.g. 'echo hi && echo done').\n\n" +
+      "TRIGGERS:\n" +
+      "- bg_run accepts optional 'triggers' to monitor process events (death, port binding, readiness, log patterns).\n" +
+      "- Trigger alerts are delivered via PIGGYBACK: queued in-memory and prepended to the NEXT tool response from this server.\n" +
+      "- To collect pending alerts, call bg_status or bg_list — any bg-manager tool call will drain the queue.\n" +
+      "- Each MCP client gets only its own alerts (separate process per stdio connection).",
   }
 );
 
@@ -88,7 +93,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           triggers: {
             type: "object",
             description:
-              "Optional monitoring triggers. Notifications sent via claude/channel (Claude Code) or elicitation (Cursor).",
+              "Optional monitoring triggers. Events are delivered via PIGGYBACK — prepended to the next tool response. Call bg_status or bg_list periodically to collect pending alerts.",
             properties: {
               notifyDead: {
                 type: "boolean",
