@@ -10,6 +10,7 @@ import { dirname, join, extname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { getAllProcesses, withStatus, getProcess, cleanupAllDead, removeProcess } from "./db.js";
 import { isAlive, killProcessTree } from "./process-utils.js";
+import { getActiveTriggers } from "./trigger-monitor.js";
 
 // ── Dashboard static files ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,13 @@ function getDashboardHtml(): string {
 
 // ── SSE client tracking ──────────────────────────────────────────
 
+function enrichWithTriggers(processes: ReturnType<typeof withStatus>) {
+  return processes.map(p => ({
+    ...p,
+    triggers: getActiveTriggers(p.project, p.name),
+  }));
+}
+
 const sseClients = new Set<http.ServerResponse>();
 let previousState = new Map<string, boolean>();
 
@@ -61,7 +69,7 @@ function broadcastProcessList(): void {
   }
 
   if (changed) {
-    const payload = `event: process_list\ndata: ${JSON.stringify(processes)}\n\n`;
+    const payload = `event: process_list\ndata: ${JSON.stringify(enrichWithTriggers(processes))}\n\n`;
     for (const client of sseClients) {
       try { client.write(payload); } catch { sseClients.delete(client); }
     }
@@ -93,7 +101,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
 
   // API: all processes with status
   if (method === "GET" && path === "/api/processes") {
-    sendJson(res, 200, withStatus(getAllProcesses()));
+    sendJson(res, 200, enrichWithTriggers(withStatus(getAllProcesses())));
     return;
   }
 
@@ -109,7 +117,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
     req.on("close", () => { sseClients.delete(res); });
 
     // Send initial state
-    const processes = withStatus(getAllProcesses());
+    const processes = enrichWithTriggers(withStatus(getAllProcesses()));
     res.write(`event: process_list\ndata: ${JSON.stringify(processes)}\n\n`);
     return;
   }
@@ -299,6 +307,9 @@ export function shutdownHttpServer(): void {
   }
 }
 
+// TODO: Make port static and configurable via MCP server args or a config file.
+// Currently auto-increments on EADDRINUSE, which makes the SessionStart hook
+// probe ports 7890-7899. A fixed port would simplify hooks and bookmarks.
 export function startHttpServer(preferredPort?: number): Promise<number> {
   const basePort = preferredPort ?? parseInt(process.env.BG_MANAGER_PORT ?? "7890", 10);
 

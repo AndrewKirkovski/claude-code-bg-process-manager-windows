@@ -9,4 +9,18 @@ export interface ProcessWithStatus {
   started_at: string
   cwd: string
   alive: boolean
+  triggers: {
+    config: {
+      notifyDead?: boolean
+      notifyPort?: boolean
+      notifyReady?: boolean
+      logTriggers?: { pattern: string; once?: boolean }[]
+    }
+    state: {
+      firedDead: boolean
+      firedReady: boolean
+      firedPorts: string[]
+      firedLogOnce: string[]
+    }
+  } | null
 }

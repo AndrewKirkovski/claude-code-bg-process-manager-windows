@@ -19,3 +19,25 @@ export interface ProcessRow {
 export interface ProcessWithStatus extends ProcessRow {
   alive: boolean;
 }
+
+// ── Trigger types ───────────────────────────────────────────────
+
+export interface LogTriggerEntry {
+  pattern: string;
+  once?: boolean;  // default false — fire every match
+}
+
+export interface TriggerConfig {
+  notifyDead?: boolean;       // default true
+  notifyPort?: boolean;       // detect localhost:PORT patterns
+  notifyReady?: boolean;      // detect "ready"/"listening"/"started" patterns
+  logTriggers?: LogTriggerEntry[];
+}
+
+export interface TriggerState {
+  config: TriggerConfig;
+  firedDead: boolean;
+  firedReady: boolean;
+  firedPorts: Set<string>;
+  firedLogOnce: Set<string>;  // pattern sources that fired (for once: true)
+}

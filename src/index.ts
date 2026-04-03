@@ -25,6 +25,8 @@ import { ensureDb, closeDb, DB_PATH } from "./db.js";
 import { migrateFromJson } from "./migrate.js";
 import { startHttpServer, shutdownHttpServer } from "./server.js";
 import { setProjectRoot, bgRun, bgList, bgKill, bgLogs, bgPortCheck, bgPortKill, bgCleanup } from "./tools.js";
+import { drainPendingEvents, setServer } from "./notifier.js";
+import { shutdownAllTriggers } from "./trigger-monitor.js";
 
 // Tracks the actual HTTP port after startup (may differ from 7890 if port taken)
 let httpPort: number | null = null;
@@ -35,7 +37,7 @@ export function getHttpPort(): number | null { return httpPort; }
 const server = new Server(
   { name: "bg-manager", version: "2.0.0" },
   {
-    capabilities: { tools: {} },
+    capabilities: { tools: {}, logging: {} },
     instructions:
       "Background process manager for Windows with a live web dashboard.\n" +
       "Dashboard: http://127.0.0.1:7890 (port may increment — use bg_status for actual URL).\n" +
@@ -49,6 +51,11 @@ const server = new Server(
       "- Smoke test: bg_run(name='probe', command='node -e \"console.log(42)\"', intent='env check') — shell builtins like echo need metacharacters to trigger bash (e.g. 'echo hi && echo done').",
   }
 );
+
+// Wire server reference so notifier can push via sendLoggingMessage
+setServer(server);
+
+// Trigger notifications: push via logging + piggyback on tool responses
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -77,6 +84,37 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           intent: {
             type: "string",
             description: "Brief description of why this process is being started",
+          },
+          triggers: {
+            type: "object",
+            description:
+              "Optional monitoring triggers. Notifications sent via claude/channel (Claude Code) or elicitation (Cursor).",
+            properties: {
+              notifyDead: {
+                type: "boolean",
+                description: "Notify when process exits (default: true)",
+              },
+              notifyPort: {
+                type: "boolean",
+                description: "Detect localhost:PORT patterns in output, notify with URL",
+              },
+              notifyReady: {
+                type: "boolean",
+                description: "Detect 'ready'/'listening'/'started'/'compiled' patterns, notify once",
+              },
+              logTriggers: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    pattern: { type: "string", description: "Regex pattern to match against log lines" },
+                    once: { type: "boolean", description: "If true, fire only on first match (default: false — fire every match)" },
+                  },
+                  required: ["pattern"],
+                },
+                description: "Regex patterns to watch for in log output",
+              },
+            },
           },
         },
         required: ["name", "command", "intent"],
@@ -188,7 +226,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       result = bgRun(
         (args as any).name,
         (args as any).command,
-        (args as any).intent
+        (args as any).intent,
+        (args as any).triggers,
       );
       break;
     case "bg_list":
@@ -224,7 +263,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       result = `Unknown tool: ${name}`;
   }
 
-  return { content: [{ type: "text", text: result }] };
+  // Piggyback: prepend any pending trigger notifications to the response
+  const alerts = drainPendingEvents();
+  return { content: [{ type: "text", text: alerts + result }] };
 });
 
 // ── Startup ──────────────────────────────────────────────────────
@@ -260,6 +301,7 @@ async function main() {
 // ── Graceful shutdown ────────────────────────────────────────────
 
 function shutdown() {
+  shutdownAllTriggers();
   shutdownHttpServer();
   closeDb();
   process.exit(0);

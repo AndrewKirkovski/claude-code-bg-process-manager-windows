@@ -12,12 +12,14 @@ import { join } from "path";
 import * as nodePty from "node-pty";
 import {
   isAlive, sanitizeName, parseSimpleCommand, findBashPath,
-  parseNetstat, findTrackedEntry, killProcessTree,
+  parseNetstat, findTrackedEntry, killProcessTree, stripAnsi,
 } from "./process-utils.js";
 import {
   addProcess, removeProcess, getProcess, getProjectProcesses,
   getAllProcesses, cleanupDead, normalizeProject, projectSlug, LOGS_DIR,
 } from "./db.js";
+import { registerTriggers, unregisterTriggers } from "./trigger-monitor.js";
+import type { TriggerConfig } from "./types.js";
 
 // Current project context (set once at startup)
 let PROJECT_ROOT = process.cwd();
@@ -34,6 +36,7 @@ export function setProjectRoot(root: string): void {
 function bgRunWithPty(
   name: string, command: string, intent: string,
   logFile: string, env: Record<string, string | undefined>,
+  triggers?: TriggerConfig,
 ): string {
   const shellPath = findBashPath();
   let ptyProcess;
@@ -70,12 +73,14 @@ function bgRunWithPty(
     cwd: PROJECT_ROOT,
   });
 
+  if (triggers) registerTriggers(PROJECT, name, pid, logFile, triggers);
+
   return `Started "${name}" (PID ${pid}, via pty)\n  Command: ${command}\n  Intent: ${intent}\n  Log: ${logFile}`;
 }
 
 // ── bg_run ───────────────────────────────────────────────────────
 
-export function bgRun(name: string, command: string, intent: string): string {
+export function bgRun(name: string, command: string, intent: string, triggers?: TriggerConfig): string {
   name = sanitizeName(name);
 
   // Check if name already in use
@@ -99,7 +104,7 @@ export function bgRun(name: string, command: string, intent: string): string {
   const needsPty = /(?:^|[\\/\s])wippy(?:\.exe)?(?:\s|$)/.test(command);
 
   if (needsPty) {
-    return bgRunWithPty(name, command, intent, logFile, spawnEnv);
+    return bgRunWithPty(name, command, intent, logFile, spawnEnv, triggers);
   }
 
   let child;
@@ -154,6 +159,8 @@ export function bgRun(name: string, command: string, intent: string): string {
     cwd: PROJECT_ROOT,
   });
 
+  if (triggers) registerTriggers(PROJECT, name, child.pid, logFile, triggers);
+
   const modeTag = spawnMode === "direct" ? "direct" : "via shell";
   return `Started "${name}" (PID ${child.pid}, ${modeTag})\n  Command: ${command}\n  Intent: ${intent}\n  Log: ${logFile}`;
 }
@@ -191,6 +198,7 @@ export function bgKill(name: string): string {
   }
 
   if (!isAlive(entry.pid)) {
+    unregisterTriggers(PROJECT, name);
     removeProcess(PROJECT, name);
     return `Process "${name}" (PID ${entry.pid}) is already dead. Removed from registry.`;
   }
@@ -200,6 +208,7 @@ export function bgKill(name: string): string {
   // Brief wait then verify — give the OS time to reap
   const stillAlive = isAlive(entry.pid);
 
+  unregisterTriggers(PROJECT, name);
   removeProcess(PROJECT, name);
   if (stillAlive) {
     return `Kill signal sent to "${name}" (PID ${entry.pid}) but process may still be terminating. Removed from registry.`;
@@ -208,13 +217,6 @@ export function bgKill(name: string): string {
 }
 
 // ── bg_logs ──────────────────────────────────────────────────────
-
-// Strip all ANSI escape sequences from text
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
-             .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-             .replace(/\r(?!\n)/g, "");
-}
 
 export function bgLogs(
   name: string,

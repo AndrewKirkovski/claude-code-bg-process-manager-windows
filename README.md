@@ -35,7 +35,7 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 
 | Tool | Description |
 |------|-------------|
-| `bg_run(name, command, intent)` | Start a background process with auto-logging and PID tracking |
+| `bg_run(name, command, intent, triggers?)` | Start a background process with auto-logging, PID tracking, and optional triggers |
 | `bg_list()` | List all tracked processes with alive/dead status |
 | `bg_kill(name)` | Kill a tracked process by name (full process tree) |
 | `bg_logs(name, lines?, raw?, filter?)` | Read last N lines from a process log (ANSI stripped by default; `raw=true` preserves colors; `filter` for substring matching) |
@@ -120,6 +120,56 @@ If you're an AI agent using this MCP server, here's what to expect:
 - **ALIVE vs DEAD** — DEAD means the process exited, not necessarily that it failed. Short-lived commands (builds, probes, one-shot scripts) go DEAD as soon as they complete. Check `bg_logs` for the actual output.
 - **Shell builtins** — `echo`, `cd`, etc. are not executables on Windows. Direct spawn fails for bare `echo hello`. Add a metacharacter to trigger Git Bash: `echo hello && echo done`, or use an actual executable: `node -e "console.log('hello')"`.
 - **Smoke test** — to verify bg-manager works: `bg_run(name='probe', command='node -e "console.log(42)"', intent='test')` then `bg_logs(name='probe')`. Should show `42`.
+
+## Triggers
+
+`bg_run` supports an optional `triggers` parameter for monitoring process events. Trigger notifications are delivered **piggybacked on the next tool response** — when Claude calls any bg-manager tool, pending alerts are prepended to the result.
+
+```jsonc
+bg_run(
+  name: "server",
+  command: "node app.js",
+  intent: "start dev server",
+  triggers: {
+    "notifyDead": true,        // alert when process exits (default: true)
+    "notifyReady": true,       // detect "ready"/"listening"/"started" patterns
+    "notifyPort": true,        // detect localhost:PORT patterns in output
+    "logTriggers": [           // custom regex patterns to watch for
+      { "pattern": "ERROR", "once": true },
+      { "pattern": "warning.*deprecated" }
+    ]
+  }
+)
+```
+
+**How delivery works:** MCP servers cannot push unsolicited messages. Instead, trigger events queue in memory and are prepended to the next tool response as a `=== TRIGGER ALERTS ===` block. This means Claude sees them the next time it calls `bg_list`, `bg_logs`, or any other bg-manager tool.
+
+## SessionStart Hook (optional)
+
+Shows bg-manager status at the start of every Claude Code session. The hook calls a script bundled with bg-manager — all logic lives in the script, so you can update it without changing settings.
+
+Add to `~/.claude/settings.json` (global) or `.claude/settings.json` (per-project):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"<path-to-bg-manager>/scripts/session-start.cjs\"",
+            "timeout": 3000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Replace `<path-to-bg-manager>` with the actual install path. For npm global installs, find it with `npm root -g`. For local dev: use the repo path directly.
 
 ## CLAUDE.md Integration
 

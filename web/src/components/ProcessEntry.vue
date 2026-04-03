@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { ProcessWithStatus } from '@/types'
 
-defineProps<{
+const props = defineProps<{
   process: ProcessWithStatus
   isSelected: boolean
 }>()
@@ -27,6 +28,18 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '...' : s
 }
 
+const triggerLabels = computed(() => {
+  const t = props.process.triggers
+  if (!t) return []
+  const labels: string[] = []
+  if (t.config.notifyDead !== false) labels.push('death')
+  if (t.config.notifyPort) labels.push('port')
+  if (t.config.notifyReady) labels.push('ready')
+  const patternCount = t.config.logTriggers?.length ?? 0
+  if (patternCount > 0) labels.push(`${patternCount} pattern${patternCount > 1 ? 's' : ''}`)
+  return labels
+})
+
 </script>
 
 <template>
@@ -49,6 +62,12 @@ function truncate(s: string, n: number): string {
       <div class="font-semibold text-[13px]">{{ process.name }}</div>
       <div class="text-[11px] text-secondary truncate">
         PID {{ process.pid }} &middot; {{ timeAgo(process.started_at) }} &middot; {{ truncate(process.command, 60) }}
+      </div>
+      <div v-if="triggerLabels.length" class="flex gap-1 mt-0.5">
+        <span
+          v-for="label in triggerLabels" :key="label"
+          class="text-[9px] px-1 py-px rounded bg-accent-subtle text-accent"
+        >{{ label }}</span>
       </div>
     </div>
     <button
