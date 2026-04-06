@@ -8,6 +8,7 @@ export interface ProcessWithStatus {
   log_file: string
   started_at: string
   cwd: string
+  env_vars: string | null
   alive: boolean
   triggers: {
     config: {

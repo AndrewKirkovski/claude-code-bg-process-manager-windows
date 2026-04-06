@@ -68,6 +68,7 @@ export function ensureDb(): void {
       log_file    TEXT    NOT NULL,
       started_at  TEXT    NOT NULL,
       cwd         TEXT    NOT NULL,
+      env_vars    TEXT,
       UNIQUE(project, name)
     );
 
@@ -77,10 +78,16 @@ export function ensureDb(): void {
     );
   `);
 
-  // Schema version tracking
+  // Schema version tracking & migrations
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined;
   if (!row) {
-    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '1')").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '2')").run();
+  } else {
+    const version = parseInt(row.value, 10);
+    if (version < 2) {
+      db.exec("ALTER TABLE processes ADD COLUMN env_vars TEXT");
+      db.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+    }
   }
 }
 
@@ -88,9 +95,9 @@ export function ensureDb(): void {
 
 export function addProcess(entry: Omit<ProcessRow, "id">): void {
   getDb().prepare(`
-    INSERT OR REPLACE INTO processes (name, project, pid, command, intent, log_file, started_at, cwd)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(entry.name, entry.project, entry.pid, entry.command, entry.intent, entry.log_file, entry.started_at, entry.cwd);
+    INSERT OR REPLACE INTO processes (name, project, pid, command, intent, log_file, started_at, cwd, env_vars)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(entry.name, entry.project, entry.pid, entry.command, entry.intent, entry.log_file, entry.started_at, entry.cwd, entry.env_vars);
 }
 
 export function removeProcess(project: string, name: string): void {

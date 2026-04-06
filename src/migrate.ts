@@ -65,6 +65,7 @@ export function migrateFromJson(projectRoot: string): void {
       log_file: newLogFile,
       started_at: e.startedAt,
       cwd: e.cwd,
+      env_vars: null,
     });
   }
 

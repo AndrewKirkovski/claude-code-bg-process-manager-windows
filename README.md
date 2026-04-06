@@ -35,7 +35,7 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 
 | Tool | Description |
 |------|-------------|
-| `bg_run(name, command, intent, triggers?)` | Start a background process with auto-logging, PID tracking, and optional triggers |
+| `bg_run(name, command, intent, triggers?, working_dir?, env?)` | Start a background process with auto-logging, PID tracking, optional triggers, custom working directory, and extra env vars |
 | `bg_list()` | List all tracked processes with alive/dead status |
 | `bg_kill(name)` | Kill a tracked process by name (full process tree) |
 | `bg_logs(name, lines?, raw?, filter?)` | Read last N lines from a process log (ANSI stripped by default; `raw=true` preserves colors; `filter` for substring matching) |
@@ -115,6 +115,15 @@ The dashboard starts automatically when the MCP server launches. Use `bg_status`
 If you're an AI agent using this MCP server, here's what to expect:
 
 - **Execution environment** — env vars come from the IDE that spawned bg-manager (VSCODE_*, CURSOR_*, ELECTRON_*, etc.), not the user's interactive terminal. PATH may differ from what the user sees in their shell.
+- **Working directory & env vars** — use `working_dir` to set the process CWD and `env` to pass extra environment variables. These are preferred over chaining `cd /path && VAR=val && cmd` in the command string:
+  ```jsonc
+  // Preferred:
+  bg_run(name='server', command='wippy.exe run -c',
+         working_dir='C:/Projects/navi-server', env={"PORT": "3000"})
+  // Instead of:
+  bg_run(name='server', command='cd C:/Projects/navi-server && PORT=3000 && ./wippy.exe run -c')
+  ```
+  `working_dir` defaults to the project root when omitted. `env` is merged with the base environment (does not replace it).
 - **Spawn behavior** — bg-manager never uses cmd.exe or COMSPEC. Simple commands (e.g. `node server.js`, `python app.py`) spawn directly with no shell. Commands containing shell metacharacters (`|`, `&`, `;`, `>`) spawn via Git Bash (`bash -c '...'`).
 - **Log contents** — logs only contain stdout/stderr from the spawned process. Empty logs mean the process produced no output (wrong path, immediate crash, buffered output, or bad quoting).
 - **ALIVE vs DEAD** — DEAD means the process exited, not necessarily that it failed. Short-lived commands (builds, probes, one-shot scripts) go DEAD as soon as they complete. Check `bg_logs` for the actual output.
@@ -130,6 +139,8 @@ bg_run(
   name: "server",
   command: "node app.js",
   intent: "start dev server",
+  working_dir: "C:/Projects/my-app",   // optional: override CWD
+  env: { "NODE_ENV": "development" },  // optional: extra env vars (merged)
   triggers: {
     "notifyDead": true,        // alert when process exits (default: true)
     "notifyReady": true,       // detect "ready"/"listening"/"started" patterns
@@ -195,6 +206,8 @@ This is important because without these instructions, Claude Code will default t
 ### Process spawning
 - Simple commands (no pipes/redirects) are spawned directly — PID is the actual process
 - Complex commands (with `&&`, `|`, `;`, etc.) spawn via Git Bash — PID is the bash wrapper
+- `working_dir` sets the CWD for the spawned process (defaults to project root)
+- `env` adds extra environment variables, merged on top of the inherited environment
 - All output (stdout + stderr) is redirected to `~/.bg-manager/logs/<project-slug>-<name>.log`
 - Python processes get `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` automatically
 - `FORCE_COLOR=1` is set to preserve ANSI color codes in log output
@@ -219,6 +232,10 @@ MCP Client (Claude/Cursor) <--stdio--> bg-manager <--HTTP:7890--> Web Browser
                                     bg-manager.db   (SQLite, WAL mode)
                                     logs/           (per-process log files)
 ```
+
+## Attribution
+
+[Process icons created by Freepik - Flaticon](https://www.flaticon.com/free-icons/process)
 
 ## License
 

@@ -8,7 +8,7 @@
 
 import { spawn, execSync } from "child_process";
 import { existsSync, statSync, openSync, readSync, closeSync, readFileSync, createWriteStream } from "fs";
-import { join } from "path";
+import { join, isAbsolute } from "path";
 import * as nodePty from "node-pty";
 import {
   isAlive, sanitizeName, parseSimpleCommand, findBashPath,
@@ -31,11 +31,19 @@ export function setProjectRoot(root: string): void {
 }
 
 
+// Format optional CWD/env notes for bg_run output
+function formatRunNotes(cwd: string, envKeys: string[]): string {
+  const cwdNote = cwd !== PROJECT_ROOT ? `\n  CWD: ${cwd}` : "";
+  const envNote = envKeys.length > 0 ? `\n  Env: ${envKeys.join(", ")}` : "";
+  return `${cwdNote}${envNote}`;
+}
+
 // ── PTY spawn (hack for programs that need a real TTY for color output) ──
 
 function bgRunWithPty(
   name: string, command: string, intent: string,
-  logFile: string, env: Record<string, string | undefined>,
+  logFile: string, spawnEnv: Record<string, string | undefined>,
+  cwd: string, envVarsJson: string | null, envKeys: string[],
   triggers?: TriggerConfig,
 ): string {
   const shellPath = findBashPath();
@@ -45,8 +53,8 @@ function bgRunWithPty(
       name: "xterm-256color",
       cols: 10000,
       rows: 50,
-      cwd: PROJECT_ROOT,
-      env: env as Record<string, string>,
+      cwd,
+      env: spawnEnv as Record<string, string>,
     });
   } catch (e: any) {
     return `Error spawning PTY process: ${e.message}`;
@@ -70,18 +78,42 @@ function bgRunWithPty(
     intent,
     log_file: logFile,
     started_at: new Date().toISOString(),
-    cwd: PROJECT_ROOT,
+    cwd,
+    env_vars: envVarsJson,
   });
 
   if (triggers) registerTriggers(PROJECT, name, pid, logFile, triggers);
 
-  return `Started "${name}" (PID ${pid}, via pty)\n  Command: ${command}\n  Intent: ${intent}\n  Log: ${logFile}`;
+  return `Started "${name}" (PID ${pid}, via pty)\n  Command: ${command}\n  Intent: ${intent}${formatRunNotes(cwd, envKeys)}\n  Log: ${logFile}`;
 }
 
 // ── bg_run ───────────────────────────────────────────────────────
 
-export function bgRun(name: string, command: string, intent: string, triggers?: TriggerConfig): string {
+export function bgRun(
+  name: string, command: string, intent: string,
+  triggers?: TriggerConfig,
+  workingDir?: string,
+  env?: Record<string, string>,
+): string {
   name = sanitizeName(name);
+
+  // Validate working_dir
+  if (workingDir) {
+    if (!isAbsolute(workingDir)) {
+      return `Error: working_dir must be an absolute path, got "${workingDir}".`;
+    }
+    try {
+      if (!statSync(workingDir).isDirectory()) {
+        return `Error: working_dir "${workingDir}" is not a directory.`;
+      }
+    } catch {
+      return `Error: working_dir "${workingDir}" does not exist.`;
+    }
+  }
+
+  const effectiveCwd = workingDir || PROJECT_ROOT;
+  const envKeys = env ? Object.keys(env) : [];
+  const envVarsJson = envKeys.length > 0 ? JSON.stringify(env) : null;
 
   // Check if name already in use
   const existing = getProcess(PROJECT, name);
@@ -92,11 +124,12 @@ export function bgRun(name: string, command: string, intent: string, triggers?: 
   const slug = projectSlug(PROJECT);
   const logFile = join(LOGS_DIR, `${slug}-${name}.log`);
 
-  const spawnEnv = {
+  const spawnEnv: Record<string, string | undefined> = {
     ...process.env,
     PYTHONUNBUFFERED: "1",
     PYTHONIOENCODING: "utf-8",
     FORCE_COLOR: "1",
+    ...(env ?? {}),
   };
 
   // HACK: wippy.exe needs a real TTY to emit ANSI colors.
@@ -104,7 +137,7 @@ export function bgRun(name: string, command: string, intent: string, triggers?: 
   const needsPty = /(?:^|[\\/\s])wippy(?:\.exe)?(?:\s|$)/.test(command);
 
   if (needsPty) {
-    return bgRunWithPty(name, command, intent, logFile, spawnEnv, triggers);
+    return bgRunWithPty(name, command, intent, logFile, spawnEnv, effectiveCwd, envVarsJson, envKeys, triggers);
   }
 
   let child;
@@ -117,7 +150,7 @@ export function bgRun(name: string, command: string, intent: string, triggers?: 
     if (parsed) {
       spawnMode = "direct";
       child = spawn(parsed.executable, parsed.args, {
-        cwd: PROJECT_ROOT,
+        cwd: effectiveCwd,
         detached: true,
         stdio: ["ignore", logFd, logFd],
         windowsHide: process.platform === "win32",
@@ -128,7 +161,7 @@ export function bgRun(name: string, command: string, intent: string, triggers?: 
       const shellPath = findBashPath();
 
       child = spawn(shellPath, ["-c", command], {
-        cwd: PROJECT_ROOT,
+        cwd: effectiveCwd,
         detached: true,
         stdio: ["ignore", logFd, logFd],
         windowsHide: process.platform === "win32",
@@ -156,13 +189,14 @@ export function bgRun(name: string, command: string, intent: string, triggers?: 
     intent,
     log_file: logFile,
     started_at: new Date().toISOString(),
-    cwd: PROJECT_ROOT,
+    cwd: effectiveCwd,
+    env_vars: envVarsJson,
   });
 
   if (triggers) registerTriggers(PROJECT, name, child.pid, logFile, triggers);
 
   const modeTag = spawnMode === "direct" ? "direct" : "via shell";
-  return `Started "${name}" (PID ${child.pid}, ${modeTag})\n  Command: ${command}\n  Intent: ${intent}\n  Log: ${logFile}`;
+  return `Started "${name}" (PID ${child.pid}, ${modeTag})\n  Command: ${command}\n  Intent: ${intent}${formatRunNotes(effectiveCwd, envKeys)}\n  Log: ${logFile}`;
 }
 
 // ── bg_list ──────────────────────────────────────────────────────
@@ -175,10 +209,18 @@ export function bgList(): string {
   for (const entry of rows) {
     const alive = isAlive(entry.pid);
     const status = alive ? "ALIVE" : "DEAD";
+    const cwdLine = entry.cwd !== PROJECT_ROOT ? `\n         CWD:     ${entry.cwd}` : "";
+    let envLine = "";
+    if (entry.env_vars) {
+      let parsed: Record<string, string>;
+      try { parsed = JSON.parse(entry.env_vars); }
+      catch { throw new Error(`Corrupted env_vars for process "${entry.name}": ${entry.env_vars}`); }
+      envLine = `\n         Env:     ${Object.keys(parsed).join(", ")}`;
+    }
     lines.push(
       `${status} | ${entry.name} (PID ${entry.pid})\n` +
       `         Command: ${entry.command}\n` +
-      `         Intent:  ${entry.intent}\n` +
+      `         Intent:  ${entry.intent}${cwdLine}${envLine}\n` +
       `         Started: ${entry.started_at}\n` +
       `         Log:     ${entry.log_file}`
     );

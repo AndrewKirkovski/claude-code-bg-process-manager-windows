@@ -28,17 +28,59 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '...' : s
 }
 
-const triggerLabels = computed(() => {
-  const t = props.process.triggers
-  if (!t) return []
-  const labels: string[] = []
-  if (t.config.notifyDead !== false) labels.push('death')
-  if (t.config.notifyPort) labels.push('port')
-  if (t.config.notifyReady) labels.push('ready')
-  const patternCount = t.config.logTriggers?.length ?? 0
-  if (patternCount > 0) labels.push(`${patternCount} pattern${patternCount > 1 ? 's' : ''}`)
-  return labels
+const displayCwd = computed(() => {
+  const cwd = props.process.cwd
+  const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts.slice(-3).join('/')
 })
+
+const envEntries = computed(() => {
+  if (!props.process.env_vars) return []
+  let parsed: Record<string, string>
+  try { parsed = JSON.parse(props.process.env_vars) }
+  catch { throw new Error(`Corrupted env_vars for process "${props.process.name}": ${props.process.env_vars}`) }
+  return Object.entries(parsed)
+})
+
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+const tooltipHtml = computed(() => {
+  const p = props.process
+  const statusColor = p.alive ? 'var(--color-alive)' : 'var(--color-dead)'
+  const statusText = p.alive ? 'ALIVE' : 'DEAD'
+
+  const row = (label: string, value: string) =>
+    `<tr><td style="color:var(--color-secondary);padding-right:8px;white-space:nowrap;vertical-align:top">${label}</td><td style="word-break:break-all">${esc(value)}</td></tr>`
+
+  let rows = ''
+  rows += row('PID', String(p.pid))
+  rows += row('Command', p.command)
+  rows += row('Intent', p.intent)
+  rows += row('CWD', p.cwd)
+  rows += row('Started', p.started_at)
+  rows += row('Log', p.log_file)
+  if (envEntries.value.length) {
+    rows += row('Env', envEntries.value.map(([k, v]) => `${k}=${v}`).join(', '))
+  }
+  const t = p.triggers
+  if (t) {
+    const parts: string[] = []
+    if (t.config.notifyDead !== false) parts.push('death')
+    if (t.config.notifyPort) parts.push('port')
+    if (t.config.notifyReady) parts.push('ready')
+    const pc = t.config.logTriggers?.length ?? 0
+    if (pc > 0) parts.push(`${pc} log pattern${pc > 1 ? 's' : ''}`)
+    if (parts.length) rows += row('Triggers', parts.join(', '))
+  }
+
+  return `<div style="font-size:12px;line-height:1.5">` +
+    `<div style="font-weight:600;margin-bottom:4px">${esc(p.name)} <span style="color:${statusColor}">${statusText}</span></div>` +
+    `<table style="border-spacing:0">${rows}</table>` +
+    `</div>`
+})
+
 
 </script>
 
@@ -48,26 +90,25 @@ const triggerLabels = computed(() => {
     :class="[
       isSelected ? 'bg-surface-3 border-l-accent' : 'border-l-transparent hover:bg-surface-3',
     ]"
+    v-tooltip="{ content: tooltipHtml, html: true, placement: 'right', delay: { show: 400, hide: 0 } }"
     @click="emit('select')"
   >
     <span
-      class="text-[11px] font-bold px-1.5 py-0.5 rounded text-center min-w-[44px] uppercase"
-      :class="process.alive
-        ? 'bg-alive-subtle text-alive'
-        : 'bg-dead-subtle text-dead'"
-    >
-      {{ process.alive ? 'alive' : 'dead' }}
-    </span>
+      class="shrink-0 w-2.5 h-2.5 rounded-full"
+      :class="process.alive ? 'bg-alive status-pulse' : 'bg-dead opacity-60'"
+    />
     <div class="flex-1 min-w-0">
-      <div class="font-semibold text-[13px]">{{ process.name }}</div>
+      <div class="font-semibold text-[13px]"><span class="text-secondary font-mono text-[11px]">{{ process.pid }}</span> {{ process.name }}</div>
       <div class="text-[11px] text-secondary truncate">
-        PID {{ process.pid }} &middot; {{ timeAgo(process.started_at) }} &middot; {{ truncate(process.command, 60) }}
+        {{ timeAgo(process.started_at) }} &middot; {{ truncate(process.command, 60) }}
       </div>
-      <div v-if="triggerLabels.length" class="flex gap-1 mt-0.5">
+      <div class="text-[10px] text-secondary truncate opacity-70">{{ displayCwd }}</div>
+      <div v-if="envEntries.length" class="flex flex-wrap gap-1 mt-0.5">
         <span
-          v-for="label in triggerLabels" :key="label"
-          class="text-[9px] px-1 py-px rounded bg-accent-subtle text-accent"
-        >{{ label }}</span>
+          v-for="[key, val] in envEntries" :key="key"
+          class="text-[9px] px-1 py-px rounded bg-surface-3 text-secondary"
+          :title="`${key}=${val}`"
+        >{{ key }}={{ truncate(val, 15) }}</span>
       </div>
     </div>
     <button

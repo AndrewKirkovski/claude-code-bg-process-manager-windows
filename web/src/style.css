@@ -55,6 +55,32 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 
+/* ── Floating-vue tooltip theme ── */
+.v-popper--theme-tooltip .v-popper__inner {
+  background: var(--color-surface-2);
+  color: var(--color-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-width: 420px;
+}
+.v-popper--theme-tooltip .v-popper__arrow-outer {
+  border-color: var(--color-border);
+}
+.v-popper--theme-tooltip .v-popper__arrow-inner {
+  border-color: var(--color-surface-2);
+}
+
+/* ── Status pulse (breathing) for alive processes ── */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.status-pulse {
+  animation: status-pulse 2s ease-in-out infinite;
+}
+
 /* ── xterm light mode: invert luminosity, restore hues ── */
 .xterm-screen {
   transition: filter 0.15s ease;

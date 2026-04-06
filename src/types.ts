@@ -13,6 +13,7 @@ export interface ProcessRow {
   log_file: string;
   started_at: string;
   cwd: string;
+  env_vars: string | null;  // JSON-encoded user-provided extras, null when not set
 }
 
 /** ProcessRow enriched with live status. */

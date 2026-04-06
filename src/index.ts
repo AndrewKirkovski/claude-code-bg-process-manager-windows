@@ -5,7 +5,7 @@
  * v2: SQLite database at ~/.bg-manager/, web UI dashboard, ANSI color capture.
  *
  * Tools:
- *   bg_run(name, command, intent)  — spawn a background process with auto-logging
+ *   bg_run(name, command, intent, triggers?, working_dir?, env?)  — spawn a background process with auto-logging
  *   bg_list()                       — list all tracked processes with status
  *   bg_kill(name)                   — kill a tracked process by name
  *   bg_logs(name, lines?, raw?, filter?) — read last N lines from a process log
@@ -48,7 +48,8 @@ const server = new Server(
       "- bg-manager NEVER uses cmd.exe or COMSPEC. Simple commands (e.g. 'node server.js') spawn directly with no shell. Complex commands (|, &, ;, >) spawn via Git Bash.\n" +
       "- Logs capture stdout/stderr only. Empty logs = process printed nothing (wrong path, immediate crash, or output buffered). Check ALIVE/DEAD status.\n" +
       "- DEAD = process exited (success or failure). Short tasks go DEAD quickly — that's normal.\n" +
-      "- Smoke test: bg_run(name='probe', command='node -e \"console.log(42)\"', intent='env check') — shell builtins like echo need metacharacters to trigger bash (e.g. 'echo hi && echo done').\n\n" +
+      "- Smoke test: bg_run(name='probe', command='node -e \"console.log(42)\"', intent='env check') — shell builtins like echo need metacharacters to trigger bash (e.g. 'echo hi && echo done').\n" +
+      "- Use working_dir to set the process CWD (e.g. working_dir='C:/Projects/my-app'). Use env to pass extra vars (e.g. env={\"PORT\": \"3000\"}). Prefer these over 'cd /path && VAR=val' in the command string.\n\n" +
       "TRIGGERS:\n" +
       "- bg_run accepts optional 'triggers' to monitor process events (death, port binding, readiness, log patterns).\n" +
       "- Trigger alerts are delivered via PIGGYBACK: queued in-memory and prepended to the NEXT tool response from this server.\n" +
@@ -69,8 +70,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         "Start a background process with automatic logging and PID tracking.\n" +
         "- ALWAYS use this instead of bash '&' or run_in_background.\n" +
+        "- Use working_dir to set the process CWD instead of 'cd /path &&' in the command. Use env to pass environment variables instead of 'VAR=val' prefix.\n" +
         "- Simple commands (no pipes/redirects) spawn directly. Complex commands (with |, &, ;, >) spawn via Git Bash.\n" +
-        "- Inherits IDE extension host env, not the user's terminal session.\n" +
+        "- Inherits IDE extension host env, not the user's terminal session. Extra env vars passed via env are merged on top.\n" +
         "- Logs capture stdout/stderr. Empty logs = nothing printed (wrong path, immediate crash, or buffered output).\n" +
         "- DEAD = process exited (success or failure). Short-lived commands go DEAD quickly — that's normal, check logs.\n" +
         "- Shell builtins (echo, cd) fail in direct mode — add a metachar to trigger bash: 'echo hi && echo done'.\n" +
@@ -120,6 +122,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 description: "Regex patterns to watch for in log output",
               },
             },
+          },
+          working_dir: {
+            type: "string",
+            description: "Working directory for the process (absolute path). Defaults to the project root. Prefer this over 'cd /path &&' in the command.",
+          },
+          env: {
+            type: "object",
+            description: "Extra environment variables to set. Merged with the base environment (does not replace). Example: {\"NODE_ENV\": \"production\", \"PORT\": \"3000\"}. Prefer this over 'VAR=val' prefix in the command.",
+            additionalProperties: { type: "string" },
           },
         },
         required: ["name", "command", "intent"],
@@ -233,6 +244,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         (args as any).command,
         (args as any).intent,
         (args as any).triggers,
+        (args as any).working_dir,
+        (args as any).env,
       );
       break;
     case "bg_list":
