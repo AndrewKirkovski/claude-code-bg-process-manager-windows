@@ -126,7 +126,7 @@ If you're an AI agent using this MCP server, here's what to expect:
   `working_dir` defaults to the project root when omitted. `env` is merged with the base environment (does not replace it).
 - **Spawn behavior** — bg-manager never uses cmd.exe or COMSPEC. Simple commands (e.g. `node server.js`, `python app.py`) spawn directly with no shell. Commands containing shell metacharacters (`|`, `&`, `;`, `>`) spawn via Git Bash (`bash -c '...'`).
 - **Log contents** — logs only contain stdout/stderr from the spawned process. Empty logs mean the process produced no output (wrong path, immediate crash, buffered output, or bad quoting).
-- **ALIVE vs DEAD** — DEAD means the process exited, not necessarily that it failed. Short-lived commands (builds, probes, one-shot scripts) go DEAD as soon as they complete. Check `bg_logs` for the actual output.
+- **ALIVE vs DEAD** — DEAD means the process exited, not necessarily that it failed. Exit codes are captured automatically (exit 0 = success, non-zero = failure). Short-lived commands (builds, probes, one-shot scripts) go DEAD as soon as they complete. Check `bg_logs` for the actual output.
 - **Shell builtins** — `echo`, `cd`, etc. are not executables on Windows. Direct spawn fails for bare `echo hello`. Add a metacharacter to trigger Git Bash: `echo hello && echo done`, or use an actual executable: `node -e "console.log('hello')"`.
 - **Smoke test** — to verify bg-manager works: `bg_run(name='probe', command='node -e "console.log(42)"', intent='test')` then `bg_logs(name='probe')`. Should show `42`.
 

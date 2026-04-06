@@ -6,6 +6,7 @@
 import { watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "fs";
 import { isAlive, stripAnsi } from "./process-utils.js";
 import { queueTriggerEvent } from "./notifier.js";
+import { getProcess } from "./db.js";
 import type { TriggerConfig, TriggerState } from "./types.js";
 
 // ── Port / ready detection patterns ─────────────────────────────
@@ -47,7 +48,7 @@ function monitorKey(project: string, name: string): string {
 
 // ── Death monitor ───────────────────────────────────────────────
 
-function startDeathMonitor(key: string, pid: number, processName: string): void {
+function startDeathMonitor(key: string, project: string, pid: number, processName: string): void {
   const handle = monitors.get(key);
   if (!handle) return;
 
@@ -55,9 +56,12 @@ function startDeathMonitor(key: string, pid: number, processName: string): void 
     if (!isAlive(pid)) {
       handle.state.firedDead = true;
       clearInterval(handle.deathTimer!);
+      const entry = getProcess(project, processName);
+      const exitInfo = entry?.exit_code !== null && entry?.exit_code !== undefined
+        ? ` with exit code ${entry.exit_code}` : "";
       queueTriggerEvent(
         processName, "dead",
-        `Process "${processName}" (PID ${pid}) has exited.`,
+        `Process "${processName}" (PID ${pid}) has exited${exitInfo}.`,
       );
     }
   }, 2000);
@@ -200,7 +204,7 @@ export function registerTriggers(
   monitors.set(key, { state });
 
   if (triggers.notifyDead !== false) {
-    startDeathMonitor(key, pid, name);
+    startDeathMonitor(key, project, pid, name);
   }
 
   const needsLogWatch = triggers.notifyPort

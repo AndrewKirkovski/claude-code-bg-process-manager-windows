@@ -179,6 +179,37 @@ describe("bg_list with working_dir and env", () => {
   });
 });
 
+// ── exit code ───────────────────────────────────────────────────
+
+describe("exit code tracking", () => {
+  it("stores null exit_code on spawn", () => {
+    bgRun("exit-init", 'node -e "console.log(1)"', "test");
+    const project = TEST_DIR.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const entry = getProjectProcesses(project).find(r => r.name === "exit-init");
+    expect(entry).toBeDefined();
+    expect(entry!.exit_code).toBeNull();
+  });
+
+  it("shows exit code in bg_list for dead processes", async () => {
+    bgRun("exit-show", 'node -e "process.exit(42)"', "test exit code");
+    // Wait for process to exit and exit handler to fire
+    await new Promise(r => setTimeout(r, 500));
+    const list = bgList();
+    const entry = list.split("\n\n").find(l => l.includes("exit-show"));
+    expect(entry).toBeDefined();
+    expect(entry).toContain("DEAD (exit 42)");
+  });
+
+  it("shows exit 0 for successful processes", async () => {
+    bgRun("exit-ok", 'node -e "console.log(1)"', "test success");
+    await new Promise(r => setTimeout(r, 500));
+    const list = bgList();
+    const entry = list.split("\n\n").find(l => l.includes("exit-ok"));
+    expect(entry).toBeDefined();
+    expect(entry).toContain("DEAD (exit 0)");
+  });
+});
+
 // ── backward compatibility ──────────────────────────────────────
 
 describe("backward compatibility", () => {

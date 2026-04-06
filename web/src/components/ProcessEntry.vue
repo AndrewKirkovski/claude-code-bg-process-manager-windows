@@ -49,7 +49,8 @@ function esc(s: string): string {
 const tooltipHtml = computed(() => {
   const p = props.process
   const statusColor = p.alive ? 'var(--color-alive)' : 'var(--color-dead)'
-  const statusText = p.alive ? 'ALIVE' : 'DEAD'
+  const exitInfo = !p.alive && p.exit_code !== null ? ` (exit ${p.exit_code})` : ''
+  const statusText = p.alive ? 'ALIVE' : `DEAD${exitInfo}`
 
   const row = (label: string, value: string) =>
     `<tr><td style="color:var(--color-secondary);padding-right:8px;white-space:nowrap;vertical-align:top">${label}</td><td style="word-break:break-all">${esc(value)}</td></tr>`

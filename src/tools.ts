@@ -16,7 +16,7 @@ import {
 } from "./process-utils.js";
 import {
   addProcess, removeProcess, getProcess, getProjectProcesses,
-  getAllProcesses, cleanupDead, normalizeProject, projectSlug, LOGS_DIR,
+  getAllProcesses, cleanupDead, normalizeProject, projectSlug, setExitCode, LOGS_DIR,
 } from "./db.js";
 import { registerTriggers, unregisterTriggers } from "./trigger-monitor.js";
 import type { TriggerConfig } from "./types.js";
@@ -64,8 +64,9 @@ function bgRunWithPty(
   ptyProcess.onData((data: string) => {
     logStream.write(data);
   });
-  ptyProcess.onExit(() => {
+  ptyProcess.onExit(({ exitCode }) => {
     logStream.end();
+    try { setExitCode(PROJECT, name, exitCode); } catch { /* process may have been removed */ }
   });
 
   const pid = ptyProcess.pid;
@@ -80,6 +81,7 @@ function bgRunWithPty(
     started_at: new Date().toISOString(),
     cwd,
     env_vars: envVarsJson,
+    exit_code: null,
   });
 
   if (triggers) registerTriggers(PROJECT, name, pid, logFile, triggers);
@@ -179,6 +181,9 @@ export function bgRun(
   }
 
   child.on("error", () => { /* prevent unhandled error crash — process is detached & logged */ });
+  child.on("exit", (code) => {
+    try { setExitCode(PROJECT, name, code ?? null); } catch { /* process may have been removed */ }
+  });
   child.unref();
 
   addProcess({
@@ -191,6 +196,7 @@ export function bgRun(
     started_at: new Date().toISOString(),
     cwd: effectiveCwd,
     env_vars: envVarsJson,
+    exit_code: null,
   });
 
   if (triggers) registerTriggers(PROJECT, name, child.pid, logFile, triggers);
@@ -208,7 +214,8 @@ export function bgList(): string {
   const lines: string[] = [];
   for (const entry of rows) {
     const alive = isAlive(entry.pid);
-    const status = alive ? "ALIVE" : "DEAD";
+    const exitStr = !alive && entry.exit_code !== null ? ` (exit ${entry.exit_code})` : "";
+    const status = alive ? "ALIVE" : `DEAD${exitStr}`;
     const cwdLine = entry.cwd !== PROJECT_ROOT ? `\n         CWD:     ${entry.cwd}` : "";
     let envLine = "";
     if (entry.env_vars) {

@@ -69,6 +69,7 @@ export function ensureDb(): void {
       started_at  TEXT    NOT NULL,
       cwd         TEXT    NOT NULL,
       env_vars    TEXT,
+      exit_code   INTEGER,
       UNIQUE(project, name)
     );
 
@@ -81,12 +82,15 @@ export function ensureDb(): void {
   // Schema version tracking & migrations
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined;
   if (!row) {
-    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '2')").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '3')").run();
   } else {
     const version = parseInt(row.value, 10);
     if (version < 2) {
       db.exec("ALTER TABLE processes ADD COLUMN env_vars TEXT");
-      db.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+    }
+    if (version < 3) {
+      db.exec("ALTER TABLE processes ADD COLUMN exit_code INTEGER");
+      db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
     }
   }
 }
@@ -95,9 +99,13 @@ export function ensureDb(): void {
 
 export function addProcess(entry: Omit<ProcessRow, "id">): void {
   getDb().prepare(`
-    INSERT OR REPLACE INTO processes (name, project, pid, command, intent, log_file, started_at, cwd, env_vars)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(entry.name, entry.project, entry.pid, entry.command, entry.intent, entry.log_file, entry.started_at, entry.cwd, entry.env_vars);
+    INSERT OR REPLACE INTO processes (name, project, pid, command, intent, log_file, started_at, cwd, env_vars, exit_code)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(entry.name, entry.project, entry.pid, entry.command, entry.intent, entry.log_file, entry.started_at, entry.cwd, entry.env_vars, entry.exit_code);
+}
+
+export function setExitCode(project: string, name: string, exitCode: number | null): void {
+  getDb().prepare("UPDATE processes SET exit_code = ? WHERE project = ? AND name = ?").run(exitCode, project, name);
 }
 
 export function removeProcess(project: string, name: string): void {

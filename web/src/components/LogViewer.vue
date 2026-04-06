@@ -33,6 +33,9 @@ useLogStream(selectedRef, logContentRef, autoScroll)
         <span class="ml-2" :class="selectedProcess.alive ? 'text-alive' : 'text-dead'">
           {{ selectedProcess.alive ? 'ALIVE' : 'DEAD' }}
         </span>
+        <span v-if="!selectedProcess.alive && selectedProcess.exit_code !== null" class="text-secondary ml-1">
+          (exit {{ selectedProcess.exit_code }})
+        </span>
       </div>
       <div v-else class="text-secondary text-[13px]">Select a process to view logs</div>
       <label class="text-xs text-secondary flex items-center gap-1 cursor-pointer">
