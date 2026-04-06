@@ -31,9 +31,13 @@ useLogStream(selectedRef, logContentRef, autoScroll)
         <span class="font-semibold">{{ selectedProcess.name }}</span>
         <span class="text-secondary ml-2">PID {{ selectedProcess.pid }}</span>
         <span class="ml-2" :class="selectedProcess.alive ? 'text-alive' : 'text-dead'">
-          {{ selectedProcess.alive ? 'ALIVE' : 'DEAD' }}
+          {{ selectedProcess.alive ? 'ALIVE' : 'COMPLETED' }}
         </span>
-        <span v-if="!selectedProcess.alive && selectedProcess.exit_code !== null" class="text-secondary ml-1">
+        <span
+          v-if="!selectedProcess.alive && selectedProcess.exit_code !== null"
+          class="ml-1"
+          :class="selectedProcess.exit_code === 0 ? 'text-exit-success' : 'text-exit-error'"
+        >
           (exit {{ selectedProcess.exit_code }})
         </span>
       </div>

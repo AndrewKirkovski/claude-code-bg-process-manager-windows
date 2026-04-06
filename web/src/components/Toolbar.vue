@@ -45,10 +45,10 @@ function shortProject(p: string): string {
       class="text-[13px] px-2.5 py-1 rounded-md border border-dead text-dead
              cursor-pointer hover:bg-dead hover:text-white transition-colors"
     >
-      Cleanup dead
+      Cleanup completed
     </button>
     <span class="text-xs text-secondary">
-      {{ filtered.length }} total, {{ alive }} alive, {{ dead }} dead
+      {{ filtered.length }} total, {{ alive }} alive, {{ dead }} completed
     </span>
   </div>
 </template>

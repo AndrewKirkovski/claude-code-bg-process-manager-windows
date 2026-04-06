@@ -16,6 +16,8 @@
   --color-accent-subtle: rgba(39, 95, 228, 0.1);
   --color-alive-subtle: rgba(35, 151, 73, 0.12);
   --color-dead-subtle: rgba(213, 38, 82, 0.12);
+  --color-exit-success: #275fe4;
+  --color-exit-error: #d52652;
 }
 
 /* ── Theme tokens — OneDark Pro ── */
@@ -32,6 +34,8 @@
   --color-accent-subtle: rgba(74, 165, 240, 0.12);
   --color-alive-subtle: rgba(140, 194, 101, 0.15);
   --color-dead-subtle: rgba(224, 85, 97, 0.15);
+  --color-exit-success: #4aa5f0;
+  --color-exit-error: #e05561;
 }
 
 /* ── Fira Mono (served as static assets) ── */

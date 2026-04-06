@@ -14,7 +14,8 @@ export function useLogStream(
     if (abortController) { abortController.abort(); abortController = null }
   }
 
-  watch(selected, async (sel) => {
+  // Watch both: on direct URL navigation, selected is set before logContent mounts
+  watch([selected, logContent], async ([sel]) => {
     closeStream()
 
     if (!sel || !logContent.value) return

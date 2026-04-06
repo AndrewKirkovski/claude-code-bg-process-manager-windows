@@ -49,8 +49,10 @@ function esc(s: string): string {
 const tooltipHtml = computed(() => {
   const p = props.process
   const statusColor = p.alive ? 'var(--color-alive)' : 'var(--color-dead)'
-  const exitInfo = !p.alive && p.exit_code !== null ? ` (exit ${p.exit_code})` : ''
-  const statusText = p.alive ? 'ALIVE' : `DEAD${exitInfo}`
+  const exitColor = p.exit_code === 0 ? 'var(--color-exit-success)' : 'var(--color-exit-error)'
+  const exitInfo = !p.alive && p.exit_code !== null
+    ? ` <span style="color:${exitColor}">(exit ${p.exit_code})</span>` : ''
+  const statusText = p.alive ? 'ALIVE' : `COMPLETED${exitInfo}`
 
   const row = (label: string, value: string) =>
     `<tr><td style="color:var(--color-secondary);padding-right:8px;white-space:nowrap;vertical-align:top">${label}</td><td style="word-break:break-all">${esc(value)}</td></tr>`
@@ -96,7 +98,11 @@ const tooltipHtml = computed(() => {
   >
     <span
       class="shrink-0 w-2.5 h-2.5 rounded-full"
-      :class="process.alive ? 'bg-alive status-pulse' : 'bg-dead opacity-60'"
+      :class="process.alive
+        ? 'bg-alive status-pulse'
+        : process.exit_code === 0
+          ? 'bg-exit-success opacity-60'
+          : 'bg-exit-error opacity-60'"
     />
     <div class="flex-1 min-w-0">
       <div class="font-semibold text-[13px]"><span class="text-secondary font-mono text-[11px]">{{ process.pid }}</span> {{ process.name }}</div>
