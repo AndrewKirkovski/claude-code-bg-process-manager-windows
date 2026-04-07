@@ -121,7 +121,10 @@ export function findBashPath(): string {
   for (const p of gitBashPaths) {
     if (existsSync(p)) return p;
   }
-  return "bash";
+  throw new Error(
+    "Git Bash not found. bg-manager requires Git for Windows to run commands that use shell features (pipes, &&, redirects). " +
+    "Install it from https://git-scm.com/downloads/win and restart your editor."
+  );
 }
 
 // ── Parent PID lookup ────────────────────────────────────────────

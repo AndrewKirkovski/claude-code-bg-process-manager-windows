@@ -44,6 +44,11 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 | `bg_cleanup()` | Remove dead entries from registry |
 | `bg_status()` | Show dashboard URL, database path, and project info |
 
+## Prerequisites
+
+- **Node.js** (v18+) — required for `npx`
+- **[Git for Windows](https://git-scm.com/downloads/win)** — provides Git Bash, which bg-manager uses to spawn complex commands (pipes, `&&`, redirects). Simple commands spawn directly without a shell.
+
 ## Install
 
 ### Cursor (one click)

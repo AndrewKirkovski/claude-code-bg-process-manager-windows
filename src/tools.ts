@@ -158,6 +158,23 @@ export function bgRun(
         windowsHide: process.platform === "win32",
         env: { ...spawnEnv, ...parsed.envVars },
       });
+      // Attach immediately to prevent unhandled 'error' crash
+      child.on("error", () => {});
+
+      // Direct spawn fails for .cmd/.ps1 shims (pnpm, npx, etc.) on Windows.
+      // Fall back to shell mode so the command still runs.
+      if (!child.pid) {
+        spawnMode = "shell";
+        const shellPath = findBashPath();
+        child = spawn(shellPath, ["-c", command], {
+          cwd: effectiveCwd,
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+          windowsHide: process.platform === "win32",
+          env: spawnEnv,
+        });
+        child.on("error", () => {});
+      }
     } else {
       spawnMode = "shell";
       const shellPath = findBashPath();
@@ -169,6 +186,7 @@ export function bgRun(
         windowsHide: process.platform === "win32",
         env: spawnEnv,
       });
+      child.on("error", () => {});
     }
   } catch (e: any) {
     closeSync(logFd);
@@ -180,7 +198,6 @@ export function bgRun(
     return `Error: process failed to start (no PID returned)`;
   }
 
-  child.on("error", () => { /* prevent unhandled error crash — process is detached & logged */ });
   child.on("exit", (code) => {
     try { setExitCode(PROJECT, name, code ?? null); } catch { /* process may have been removed */ }
   });

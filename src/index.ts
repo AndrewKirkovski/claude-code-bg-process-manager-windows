@@ -328,4 +328,17 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
+// Safety net: log fatal errors before exiting
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`bg-manager: uncaught exception: ${err.stack ?? err.message}\n`);
+  shutdownAllTriggers();
+  shutdownHttpServer();
+  closeDb();
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  process.stderr.write(`bg-manager: unhandled rejection: ${detail}\n`);
+});
+
 main().catch(console.error);
