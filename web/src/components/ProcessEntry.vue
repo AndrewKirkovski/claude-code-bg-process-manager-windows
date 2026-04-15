@@ -78,8 +78,11 @@ const tooltipHtml = computed(() => {
     if (parts.length) rows += row('Triggers', parts.join(', '))
   }
 
+  const modeTag = p.mode === 'sync'
+    ? ` <span style="color:var(--color-accent);font-size:10px">[SYNC]</span>`
+    : ''
   return `<div style="font-size:12px;line-height:1.5">` +
-    `<div style="font-weight:600;margin-bottom:4px">${esc(p.name)} <span style="color:${statusColor}">${statusText}</span></div>` +
+    `<div style="font-weight:600;margin-bottom:4px">${esc(p.name)}${modeTag} <span style="color:${statusColor}">${statusText}</span></div>` +
     `<table style="border-spacing:0">${rows}</table>` +
     `</div>`
 })
@@ -105,7 +108,15 @@ const tooltipHtml = computed(() => {
           : 'bg-exit-error opacity-60'"
     />
     <div class="flex-1 min-w-0">
-      <div class="font-semibold text-[13px]"><span class="text-secondary font-mono text-[11px]">{{ process.pid }}</span> {{ process.name }}</div>
+      <div class="font-semibold text-[13px]">
+        <span class="text-secondary font-mono text-[11px]">{{ process.pid }}</span>
+        {{ process.name }}
+        <span
+          v-if="process.mode === 'sync'"
+          class="inline-block text-[9px] font-bold px-1 py-px rounded bg-accent-subtle text-accent align-middle ml-1"
+          title="Synchronous run (sync_run). Converted to background if it exceeded its timeout."
+        >SYNC</span>
+      </div>
       <div class="text-[11px] text-secondary truncate">
         {{ timeAgo(process.started_at) }} &middot; {{ truncate(process.command, 60) }}
       </div>

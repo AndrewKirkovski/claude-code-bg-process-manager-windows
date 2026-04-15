@@ -28,17 +28,19 @@ This is not a one-time issue — **Claude Code re-discovers these failures every
 - **Log capture with colors** — all stdout/stderr goes to `~/.bg-manager/logs/`, with PTY support for programs that need `isatty()=true` for color output
 - **Port management** — `bg_port_check` uses `netstat -ano` (the only reliable method on Windows), correlates PIDs with tracked processes by walking the parent chain
 - **Cross-project visibility** — all projects share one central database, viewable in the web dashboard
-- **Smart spawning** — simple commands spawn directly (PID = actual process), complex commands (pipes, `&&`) spawn via Git Bash with proper wrapper tracking
-- **Python-friendly** — automatically sets `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8`
+- **Smart spawning** — simple commands spawn directly (PID = actual process), complex commands (pipes, `&&`) spawn via Git Bash with proper wrapper tracking. Command parsing uses [`shell-quote`](https://www.npmjs.com/package/shell-quote) so quoted paths with spaces (`"C:/Program Files/node.exe"`) work correctly.
+- **Synchronous runs** — `sync_run` waits for a command to finish and returns its full output + exit code in one tool call. If the command exceeds its timeout, it's automatically converted to a background process — so long-running commands don't waste tokens on partial polling loops, they just flip to `read_log` follow-up.
+- **Python-friendly** — automatically sets `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` for every process, and adds `PYTHONUTF8=1` when the command's executable looks like a Python interpreter (`python`, `python3`, `py`).
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
 | `bg_run(name, command, intent, triggers?, working_dir?, env?)` | Start a background process with auto-logging, PID tracking, optional triggers, custom working directory, and extra env vars |
+| `sync_run(name, command, intent, timeout_sec?, working_dir?, env?, lines?, raw?, filter?, filter_regex?, max_bytes?)` | Run a command **synchronously** and return its captured output + exit code + duration when it finishes. Accepts the **same log-filtering params as `read_log`** (`lines`, `raw`, `filter`, `filter_regex`) so you can grep the output in a single call. If it exceeds `timeout_sec` (default 30, max 3600), the process is automatically **converted to a background process** and a partial-output response is returned with follow-up hints. The full captured log is persisted on disk — re-read with a different filter via `read_log` instead of re-running the command. |
 | `bg_list()` | List all tracked processes with alive/dead status |
 | `bg_kill(name)` | Kill a tracked process by name (full process tree) |
-| `bg_logs(name, lines?, raw?, filter?)` | Read last N lines from a process log (ANSI stripped by default; `raw=true` preserves colors; `filter` for substring matching) |
+| `read_log(name, lines?, raw?, filter?, filter_regex?)` | Read and filter the log of any tracked process (both `bg_run` and `sync_run`). Tails the last N lines (default 50, max 1000). ANSI stripped by default (`raw=true` preserves). `filter` is case-insensitive substring by default; set `filter_regex=true` to switch to regex (e.g. `^FAIL`, `\\berror\\b`, `warn.*deprecated`). Filter is applied before the line cap, and the response header shows how many lines matched. |
 | `bg_port_check(port)` | Check what's listening on a port (with tracked process correlation) |
 | `bg_port_kill(port)` | Kill whatever is listening on a port |
 | `bg_cleanup()` | Remove dead entries from registry |
@@ -131,9 +133,9 @@ If you're an AI agent using this MCP server, here's what to expect:
   `working_dir` defaults to the project root when omitted. `env` is merged with the base environment (does not replace it).
 - **Spawn behavior** — bg-manager never uses cmd.exe or COMSPEC. Simple commands (e.g. `node server.js`, `python app.py`) spawn directly with no shell. Commands containing shell metacharacters (`|`, `&`, `;`, `>`) spawn via Git Bash (`bash -c '...'`).
 - **Log contents** — logs only contain stdout/stderr from the spawned process. Empty logs mean the process produced no output (wrong path, immediate crash, buffered output, or bad quoting).
-- **ALIVE vs DEAD** — DEAD means the process exited, not necessarily that it failed. Exit codes are captured automatically (exit 0 = success, non-zero = failure). Short-lived commands (builds, probes, one-shot scripts) go DEAD as soon as they complete. Check `bg_logs` for the actual output.
+- **ALIVE vs DEAD** — DEAD means the process exited, not necessarily that it failed. Exit codes are captured automatically (exit 0 = success, non-zero = failure). Short-lived commands (builds, probes, one-shot scripts) go DEAD as soon as they complete. Check `read_log` for the actual output.
 - **Shell builtins** — `echo`, `cd`, etc. are not executables on Windows. Direct spawn fails for bare `echo hello`. Add a metacharacter to trigger Git Bash: `echo hello && echo done`, or use an actual executable: `node -e "console.log('hello')"`.
-- **Smoke test** — to verify bg-manager works: `bg_run(name='probe', command='node -e "console.log(42)"', intent='test')` then `bg_logs(name='probe')`. Should show `42`.
+- **Smoke test** — to verify bg-manager works: `bg_run(name='probe', command='node -e "console.log(42)"', intent='test')` then `read_log(name='probe')`. Should show `42`.
 
 ## Triggers
 
@@ -158,7 +160,54 @@ bg_run(
 )
 ```
 
-**How delivery works:** MCP servers cannot push unsolicited messages. Instead, trigger events queue in memory and are prepended to the next tool response as a `=== TRIGGER ALERTS ===` block. This means Claude sees them the next time it calls `bg_list`, `bg_logs`, or any other bg-manager tool.
+**How delivery works:** MCP servers cannot push unsolicited messages. Instead, trigger events queue in memory and are prepended to the next tool response as a `=== TRIGGER ALERTS ===` block. This means Claude sees them the next time it calls `bg_list`, `read_log`, or any other bg-manager tool.
+
+## Synchronous Runs (`sync_run`)
+
+Use `sync_run` instead of redirecting output to a temp file when you just want a command's output back in one shot:
+
+```jsonc
+// Quick test run — returns full output + exit code when it finishes
+sync_run(
+  name: "unit",
+  command: "npm test -- --run",
+  intent: "run the unit suite",
+  timeout_sec: 60,          // default 30
+  filter: "FAIL",           // grep the output in one call
+  lines: 50
+)
+
+// Regex filter — show the last 20 stack-frame-looking lines
+sync_run(
+  name: "lint",
+  command: "pnpm eslint src",
+  intent: "lint check",
+  filter: "(error|^\\s+at )",
+  filter_regex: true,
+  lines: 20
+)
+
+// Long-running command — on timeout, bg-manager hands you control back
+sync_run(
+  name: "heavy-build",
+  command: "npm run build:all",
+  intent: "full production build",
+  timeout_sec: 10
+)
+// => "sync_run \"heavy-build\" DID NOT FINISH within 10s — converted to background.
+//     Follow with: read_log name=\"heavy-build\" | stop with: bg_kill name=\"heavy-build\"
+//     Partial output (...): ..."
+```
+
+**Key properties:**
+
+- **Same spawn engine as `bg_run`** — direct spawn for simple commands, Git Bash fallback for shell features, ConPTY for wippy. Same `working_dir` / `env` params. Same Python env defaults.
+- **Same log-filtering params as `read_log`** — `lines`, `raw`, `filter`, `filter_regex` work identically in both tools, so you don't have to learn two APIs. Filter is case-insensitive substring by default; flip `filter_regex: true` for regex patterns like `^FAIL` or `\berror\b`.
+- **Full output is persisted on disk** at `~/.bg-manager/logs/<slug>-<name>.log` and the registry entry stays after completion. If your filter dropped too many lines, or you want to re-examine the output with different criteria — **do not re-run the command**. Call `read_log(name=<same name>, filter=..., lines=..., filter_regex=...)` to re-filter the already-captured log. This is the intended workflow: `sync_run` to execute, `read_log` to iterate.
+- **Timeout → background conversion** is transparent: the process keeps running, the log file keeps growing, and it shows up in `bg_list` tagged `SYNC`. Follow it with `read_log` exactly like a `bg_run` process.
+- **Output is trimmed on a line boundary** to `max_bytes` (default 256KB, max 1MB). Oversized output gets the last N bytes of the disk file, so you always see the most recent lines. Filter matches are counted against everything read from disk, and `lines` caps the returned slice.
+- **Piggyback events** queued by triggers on other processes (e.g. a background server dying while `sync_run` is waiting for a build to finish) are captured and prepended to the `sync_run` response — no events are lost during the wait.
+- **Strip colors by default** — `raw: false` (default) strips ANSI codes from the returned output. Pass `raw: true` to keep them.
 
 ## SessionStart Hook (optional)
 
@@ -193,15 +242,64 @@ Add the following to your project's `CLAUDE.md` (or global `~/.claude/CLAUDE.md`
 
 ```markdown
 ## Process Management — MANDATORY
-- **ALWAYS use `bg-manager` MCP tools** (`bg_run`, `bg_list`, `bg_kill`, `bg_logs`) for ALL background processes. NEVER use bash `&` or `run_in_background` directly.
-- `bg_run` automatically: captures PID, logs stdout/stderr to `~/.bg-manager/logs/`, tracks metadata (intent, command, start time)
-- `bg_list` shows all tracked processes with alive/dead status — check what's running
-- `bg_kill <name>` kills by exact PID from registry — never kills unrelated processes
-- `bg_logs <name>` reads the log tail — use instead of `tail -f` on unknown files
+- **ALWAYS use `bg-manager` MCP tools** (`bg_run`, `sync_run`, `bg_list`, `bg_kill`, `read_log`) for ALL process execution. NEVER use bash `&`, `run_in_background`, or redirect output to temp files.
+- `bg_run` — start a long-lived background process (servers, watchers). Automatically captures PID, logs stdout/stderr to `~/.bg-manager/logs/`, tracks metadata (intent, command, start time).
+- `bg_list` shows all tracked processes with alive/dead status — check what's running.
+- `bg_kill <name>` kills by exact PID from registry — never kills unrelated processes.
+- `read_log <name>` reads and filters the log of ANY tracked process (both `bg_run` and `sync_run` entries). Use instead of `tail -f` / `grep` on unknown files.
 - **BEFORE starting ANY server/process**: run `bg_list` to check what's already running. `bg_kill` old one first.
-- **BEFORE editing server code**: `bg_list`, `bg_kill` the server, then edit, rebuild, `bg_run`
-- NEVER blanket-kill by process name — always by exact name via `bg_kill`
-- NEVER use bash `&` directly — use `bg_run` instead
+- **BEFORE editing server code**: `bg_list`, `bg_kill` the server, then edit, rebuild, `bg_run`.
+- NEVER blanket-kill by process name — always by exact name via `bg_kill`.
+- NEVER use bash `&` directly — use `bg_run` (persistent) or `sync_run` (one-shot) instead.
+
+## Capturing command output — use `sync_run`, not redirection — MANDATORY
+- **NEVER** redirect command output to a temp file just to read it back. Patterns like `cmd > /tmp/out.log 2>&1 && cat /tmp/out.log`, `cmd | tee /tmp/out.log`, or `cmd 2>&1 > output.txt` are BANNED. They are unreliable on Windows/Git Bash (path handling, cp1252 encoding, partial flushes, orphaned temp files) and they throw away the exit code.
+- **ALWAYS use `sync_run`** when you need the output AND exit code of a one-shot command — builds, tests, linters, scripts, `git` operations, `npm run …`, `pytest`, anything you'd normally want to "run and see what happened".
+  - `sync_run` runs the command, waits for it to finish, and returns the full captured stdout+stderr, exit code, and duration in a single tool call. No temp files, no redirection, no parsing ceremony.
+  - It uses the same spawn engine as `bg_run` — so `working_dir`, `env`, Python UTF-8 defaults, `.cmd`/`.ps1` shim fallback, and wippy ConPTY all work identically.
+- **Timeout handling is automatic.** Pass `timeout_sec` (default 30, max 3600). If the command doesn't finish by then, bg-manager transparently converts it to a background process and returns a "did-not-finish" message with a `read_log name=<name>` hint. You don't lose the process, you don't lose partial output, and you don't have to guess durations up front — start with a modest `timeout_sec`, and if it rolls over, follow up with `read_log` as normal.
+- **Filter the output in one call.** `sync_run` accepts the same `lines`, `filter`, `filter_regex`, and `raw` params as `read_log`. Use `filter` to grep for patterns like `"error"`, `"FAIL"`, or `"^WARN"` (with `filter_regex: true`). The response header shows how many lines matched, so you know if there's more.
+- **Correct usage patterns:**
+  ```
+  sync_run(name="build", command="npm run build", intent="production build", timeout_sec=120)
+  sync_run(name="lint", command="pnpm eslint src", intent="lint check", filter="error", lines=50)
+  sync_run(name="pytest", command="python -m pytest tests/ -v", intent="unit tests", filter="FAIL|^E ", filter_regex=true, timeout_sec=300)
+  sync_run(name="git-status", command="git status --short", intent="check working tree")
+  ```
+- **BANNED patterns** (never write these — use `sync_run` instead):
+  ```
+  npm run build > /tmp/build.log 2>&1 && cat /tmp/build.log  # BANNED
+  pytest tests/ | tee /tmp/pytest.log                         # BANNED
+  node script.js 2>&1 > .local/out.txt                        # BANNED
+  ```
+
+## Re-filter logs — don't re-run — MANDATORY
+- **The full output of every `sync_run` is persisted to disk** at `~/.bg-manager/logs/<slug>-<name>.log` and the registry entry stays after completion (tagged `SYNC` in the dashboard). Until you run `bg_cleanup`, you can re-read the already-captured log any number of times.
+- **If your first `sync_run` filter was too narrow, too broad, or just wrong — DO NOT re-run the command.** Re-running is slow, wastes tokens, and can give different results (flaky tests, non-deterministic builds, different timestamps). Instead, call `read_log` on the same name with a different `filter` / `lines` / `filter_regex`:
+  ```
+  # Step 1: run once
+  sync_run(name="test", command="npm test", intent="run tests", filter="FAIL", lines=10)
+  # => 3 matched, last 10 lines shown — wait, I want to see the assertion details
+
+  # Step 2: re-read WITHOUT re-running — instant, uses the persisted log
+  read_log(name="test", filter="Expected|Actual|AssertionError", filter_regex=true, lines=30)
+
+  # Step 3: widen the net to see passing tests too
+  read_log(name="test", lines=200)  # no filter = full tail
+  ```
+- `read_log` and `sync_run` share the exact same filter engine, so anything you can do in one works in the other. Learn one, use both.
+- The only reason to re-run a `sync_run` is if the source code / inputs actually changed. Before re-running, ask: "could I answer my question by re-filtering the existing log?" If yes, use `read_log`.
+
+## Regex filtering — when substring isn't enough
+- By default, `filter` is a case-insensitive substring match — `filter: "error"` catches `ERROR`, `errors`, `SomeError`, etc. Array form (`filter: ["error", "warn"]`) is OR-matched.
+- For anchored or structured patterns, pass `filter_regex: true`. Each `filter` entry is then compiled as a case-insensitive regex:
+  ```
+  read_log(name="build", filter="^FAIL", filter_regex=true)                    # anchored
+  read_log(name="build", filter="\\berror\\b", filter_regex=true)              # word boundary
+  read_log(name="build", filter="warn.*deprecated", filter_regex=true)         # pattern
+  read_log(name="build", filter=["^E\\s", "^F\\s"], filter_regex=true)         # array-OR regex
+  ```
+- Invalid regex returns a clear error — fix the pattern and retry, no re-run needed.
 ```
 
 This is important because without these instructions, Claude Code will default to its built-in `run_in_background` which loses PID tracking and makes process management unreliable on Windows.
@@ -209,13 +307,16 @@ This is important because without these instructions, Claude Code will default t
 ## How It Works
 
 ### Process spawning
+- Commands are parsed with [`shell-quote`](https://www.npmjs.com/package/shell-quote), which handles quoted paths with spaces correctly (`"C:/Program Files/node.exe" --version`)
 - Simple commands (no pipes/redirects) are spawned directly — PID is the actual process
 - Complex commands (with `&&`, `|`, `;`, etc.) spawn via Git Bash — PID is the bash wrapper
+- `.cmd` / `.ps1` shims (pnpm, npx, etc.) transparently fall back from direct spawn to shell mode on Windows
 - `working_dir` sets the CWD for the spawned process (defaults to project root)
-- `env` adds extra environment variables, merged on top of the inherited environment
+- `env` adds extra environment variables, merged on top of the inherited environment (user `env` wins over every default)
 - All output (stdout + stderr) is redirected to `~/.bg-manager/logs/<project-slug>-<name>.log`
-- Python processes get `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` automatically
-- `FORCE_COLOR=1` is set to preserve ANSI color codes in log output
+- Every process gets `PYTHONUNBUFFERED=1`, `PYTHONIOENCODING=utf-8`, and `FORCE_COLOR=1` by default
+- Commands whose first token is a Python interpreter (`python`, `python3`, `py`, or any `*.exe` variant — detected via shell-quote-parsed tokens so quoted paths work) additionally get `PYTHONUTF8=1`
+- `bg_run` and `sync_run` share a single internal `spawnProcess()` helper, so any fix to the spawn path benefits both tools automatically
 
 ### Process killing (Windows)
 - Uses PowerShell `Stop-Process` with recursive tree kill — kills children first, then parent

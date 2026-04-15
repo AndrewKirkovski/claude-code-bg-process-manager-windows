@@ -10,6 +10,7 @@ export interface ProcessWithStatus {
   cwd: string
   env_vars: string | null
   exit_code: number | null
+  mode: 'bg' | 'sync'
   alive: boolean
   triggers: {
     config: {

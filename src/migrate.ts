@@ -67,6 +67,7 @@ export function migrateFromJson(projectRoot: string): void {
       cwd: e.cwd,
       env_vars: null,
       exit_code: null,
+      mode: "bg",
     });
   }
 

@@ -5,6 +5,8 @@
 
 import { execSync } from "child_process";
 import { existsSync } from "fs";
+import { parse as shellParse } from "shell-quote";
+import { basename } from "path";
 import type { ProcessRow } from "./types.js";
 
 // ── PID helpers ──────────────────────────────────────────────────
@@ -45,48 +47,34 @@ export function sanitizeName(name: string): string {
 // ── Command parsing ──────────────────────────────────────────────
 
 /**
- * Returns true if the command contains unquoted shell metacharacters
- * and therefore needs `bash -c` wrapping.
- */
-export function needsShell(command: string): boolean {
-  let inSingle = false;
-  let inDouble = false;
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
-    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
-    if (!inSingle && !inDouble && "|&;<>`$()".includes(ch)) return true;
-  }
-  return false;
-}
-
-/**
- * Parse a simple command into executable + args, extracting leading ENV=VAR.
- * Returns null if the command needs a shell.
+ * Parse a command string into executable + args via shell-quote, extracting
+ * leading ENV=VAR assignments. Returns null if the command contains any shell
+ * operator ({op: '|'}, {op: '>'}, etc.) or a glob pattern — those cases need
+ * a real shell.
+ *
+ * shell-quote returns a mixed array: plain strings for tokens, and objects
+ * ({op} for operators, {pattern} for unexpanded globs, {comment} for #...).
+ * Any non-string entry is the "needs shell" signal.
  */
 export function parseSimpleCommand(command: string): {
   envVars: Record<string, string>;
   executable: string;
   args: string[];
 } | null {
-  if (needsShell(command)) return null;
+  let parsed: ReturnType<typeof shellParse>;
+  try {
+    parsed = shellParse(command);
+  } catch {
+    return null;
+  }
+
+  if (parsed.length === 0) return null;
 
   const tokens: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
-    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
-    if ((ch === " " || ch === "\t") && !inSingle && !inDouble) {
-      if (current) { tokens.push(current); current = ""; }
-      continue;
-    }
-    current += ch;
+  for (const entry of parsed) {
+    if (typeof entry !== "string") return null; // operator/glob/comment → shell
+    tokens.push(entry);
   }
-  if (current) tokens.push(current);
-  if (tokens.length === 0) return null;
 
   const envVars: Record<string, string> = {};
   let startIdx = 0;
@@ -107,6 +95,33 @@ export function parseSimpleCommand(command: string): {
     executable: tokens[startIdx],
     args: tokens.slice(startIdx + 1),
   };
+}
+
+/**
+ * Detect whether a command's first executable is a Python interpreter.
+ * Used to set PYTHONUTF8=1 + PYTHONIOENCODING=utf-8 defaults so child
+ * Python processes don't crash on cp1252 Windows consoles.
+ *
+ * Uses shell-quote tokenisation so quoted paths ("C:\Program Files\python.exe")
+ * are handled correctly. For commands that need a shell (pipes, etc.), we
+ * scan the first non-env token instead.
+ */
+export function commandRunsPython(command: string): boolean {
+  let parsed: ReturnType<typeof shellParse>;
+  try {
+    parsed = shellParse(command);
+  } catch {
+    return false;
+  }
+
+  for (const entry of parsed) {
+    if (typeof entry !== "string") return false; // first operator reached — stop
+    // skip leading ENV=VAR assignments
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(entry)) continue;
+    const exe = basename(entry).toLowerCase().replace(/\.exe$/, "");
+    return exe === "python" || exe === "python3" || exe === "py";
+  }
+  return false;
 }
 
 // ── Shell path detection ─────────────────────────────────────────

@@ -1,18 +1,18 @@
 /**
- * MCP tool implementations: bg_run, bg_list, bg_kill, bg_logs,
+ * MCP tool implementations: bg_run, sync_run, bg_list, bg_kill, read_log,
  * bg_port_check, bg_port_kill, bg_cleanup.
  *
  * All functions return a plain string (displayed to Claude).
- * Tool signatures and output format are identical to v1.
  */
 
-import { spawn, execSync } from "child_process";
+import { spawn, execSync, type ChildProcess } from "child_process";
 import { existsSync, statSync, openSync, readSync, closeSync, readFileSync, createWriteStream } from "fs";
 import { join, isAbsolute } from "path";
 import * as nodePty from "node-pty";
 import {
   isAlive, sanitizeName, parseSimpleCommand, findBashPath,
   parseNetstat, findTrackedEntry, killProcessTree, stripAnsi,
+  commandRunsPython,
 } from "./process-utils.js";
 import {
   addProcess, removeProcess, getProcess, getProjectProcesses,
@@ -38,99 +38,70 @@ function formatRunNotes(cwd: string, envKeys: string[]): string {
   return `${cwdNote}${envNote}`;
 }
 
-// ── PTY spawn (hack for programs that need a real TTY for color output) ──
+// ── Spawn helper (shared by bg_run and sync_run) ─────────────────
 
-function bgRunWithPty(
-  name: string, command: string, intent: string,
-  logFile: string, spawnEnv: Record<string, string | undefined>,
-  cwd: string, envVarsJson: string | null, envKeys: string[],
-  triggers?: TriggerConfig,
-): string {
-  const shellPath = findBashPath();
-  let ptyProcess;
-  try {
-    ptyProcess = nodePty.spawn(shellPath, ["-c", command], {
-      name: "xterm-256color",
-      cols: 10000,
-      rows: 50,
-      cwd,
-      env: spawnEnv as Record<string, string>,
-    });
-  } catch (e: any) {
-    return `Error spawning PTY process: ${e.message}`;
-  }
+type SpawnMode = "direct" | "shell" | "pty";
 
-  const logStream = createWriteStream(logFile, { flags: "w" });
-  ptyProcess.onData((data: string) => {
-    logStream.write(data);
-  });
-  ptyProcess.onExit(({ exitCode }) => {
-    logStream.end();
-    try { setExitCode(PROJECT, name, exitCode); } catch { /* process may have been removed */ }
-  });
-
-  const pid = ptyProcess.pid;
-
-  addProcess({
-    name,
-    project: PROJECT,
-    pid,
-    command,
-    intent,
-    log_file: logFile,
-    started_at: new Date().toISOString(),
-    cwd,
-    env_vars: envVarsJson,
-    exit_code: null,
-  });
-
-  if (triggers) registerTriggers(PROJECT, name, pid, logFile, triggers);
-
-  return `Started "${name}" (PID ${pid}, via pty)\n  Command: ${command}\n  Intent: ${intent}${formatRunNotes(cwd, envKeys)}\n  Log: ${logFile}`;
+interface SpawnedProcess {
+  pid: number;
+  spawnMode: SpawnMode;
+  logFile: string;
+  effectiveCwd: string;
+  envKeys: string[];
+  /** Resolves with exit code when the child exits (null = unknown). */
+  onExit: Promise<number | null>;
+  /** Release our reference so Node doesn't wait for this child on shutdown. */
+  detach: () => void;
+  /** Kill the process tree. */
+  kill: () => void;
 }
 
-// ── bg_run ───────────────────────────────────────────────────────
-
-export function bgRun(
-  name: string, command: string, intent: string,
-  triggers?: TriggerConfig,
-  workingDir?: string,
-  env?: Record<string, string>,
-): string {
-  name = sanitizeName(name);
-
+/**
+ * Validates args, resolves spawn mode (direct / shell / pty), opens the log
+ * file, spawns the child, and wires up the exit-code capture. Caller decides
+ * whether to unref() (background) or await onExit (sync).
+ *
+ * Throws Error on validation / spawn failure — caller formats the message.
+ */
+function spawnProcess(
+  name: string, command: string,
+  workingDir: string | undefined,
+  env: Record<string, string> | undefined,
+): SpawnedProcess {
   // Validate working_dir
   if (workingDir) {
     if (!isAbsolute(workingDir)) {
-      return `Error: working_dir must be an absolute path, got "${workingDir}".`;
+      throw new Error(`working_dir must be an absolute path, got "${workingDir}".`);
     }
     try {
       if (!statSync(workingDir).isDirectory()) {
-        return `Error: working_dir "${workingDir}" is not a directory.`;
+        throw new Error(`working_dir "${workingDir}" is not a directory.`);
       }
-    } catch {
-      return `Error: working_dir "${workingDir}" does not exist.`;
+    } catch (e: any) {
+      if (e.message?.startsWith("working_dir")) throw e;
+      throw new Error(`working_dir "${workingDir}" does not exist.`);
     }
   }
 
   const effectiveCwd = workingDir || PROJECT_ROOT;
   const envKeys = env ? Object.keys(env) : [];
-  const envVarsJson = envKeys.length > 0 ? JSON.stringify(env) : null;
-
-  // Check if name already in use
-  const existing = getProcess(PROJECT, name);
-  if (existing && isAlive(existing.pid)) {
-    return `Error: process "${name}" is already running (PID ${existing.pid}). Kill it first with bg_kill.`;
-  }
 
   const slug = projectSlug(PROJECT);
   const logFile = join(LOGS_DIR, `${slug}-${name}.log`);
 
-  const spawnEnv: Record<string, string | undefined> = {
-    ...process.env,
+  // Base env: inherit parent, set always-on defaults, optionally add PYTHONUTF8
+  // if the command looks like it runs Python, then let user env override.
+  const baseDefaults: Record<string, string> = {
     PYTHONUNBUFFERED: "1",
     PYTHONIOENCODING: "utf-8",
     FORCE_COLOR: "1",
+  };
+  if (commandRunsPython(command)) {
+    baseDefaults.PYTHONUTF8 = "1";
+  }
+  const spawnEnv: Record<string, string | undefined> = {
+    ...process.env,
+    ...baseDefaults,
     ...(env ?? {}),
   };
 
@@ -139,11 +110,42 @@ export function bgRun(
   const needsPty = /(?:^|[\\/\s])wippy(?:\.exe)?(?:\s|$)/.test(command);
 
   if (needsPty) {
-    return bgRunWithPty(name, command, intent, logFile, spawnEnv, effectiveCwd, envVarsJson, envKeys, triggers);
+    const shellPath = findBashPath();
+    const ptyProcess = nodePty.spawn(shellPath, ["-c", command], {
+      name: "xterm-256color",
+      cols: 10000,
+      rows: 50,
+      cwd: effectiveCwd,
+      env: spawnEnv as Record<string, string>,
+    });
+
+    const logStream = createWriteStream(logFile, { flags: "w" });
+    ptyProcess.onData((data: string) => { logStream.write(data); });
+
+    const onExit = new Promise<number | null>((resolve) => {
+      ptyProcess.onExit(({ exitCode }) => {
+        logStream.end();
+        try { setExitCode(PROJECT, name, exitCode); } catch { /* removed */ }
+        resolve(exitCode ?? null);
+      });
+    });
+
+    return {
+      pid: ptyProcess.pid,
+      spawnMode: "pty",
+      logFile,
+      effectiveCwd,
+      envKeys,
+      onExit,
+      // node-pty has no unref() — the pty process is detached by the library itself.
+      detach: () => { /* no-op */ },
+      kill: () => { try { ptyProcess.kill(); } catch { /* already dead */ } },
+    };
   }
 
-  let child;
-  let spawnMode: "direct" | "shell";
+  // Non-PTY: spawn directly if the command is simple, fall back to shell.
+  let child: ChildProcess;
+  let spawnMode: SpawnMode;
 
   const logFd = openSync(logFile, "w");
   try {
@@ -158,8 +160,7 @@ export function bgRun(
         windowsHide: process.platform === "win32",
         env: { ...spawnEnv, ...parsed.envVars },
       });
-      // Attach immediately to prevent unhandled 'error' crash
-      child.on("error", () => {});
+      child.on("error", () => {}); // prevent unhandled 'error' crash
 
       // Direct spawn fails for .cmd/.ps1 shims (pnpm, npx, etc.) on Windows.
       // Fall back to shell mode so the command still runs.
@@ -178,7 +179,6 @@ export function bgRun(
     } else {
       spawnMode = "shell";
       const shellPath = findBashPath();
-
       child = spawn(shellPath, ["-c", command], {
         cwd: effectiveCwd,
         detached: true,
@@ -188,38 +188,330 @@ export function bgRun(
       });
       child.on("error", () => {});
     }
-  } catch (e: any) {
+  } finally {
     closeSync(logFd);
-    return `Error spawning process: ${e.message}`;
   }
-  closeSync(logFd);
 
   if (!child.pid) {
-    return `Error: process failed to start (no PID returned)`;
+    throw new Error("process failed to start (no PID returned)");
   }
 
-  child.on("exit", (code) => {
-    try { setExitCode(PROJECT, name, code ?? null); } catch { /* process may have been removed */ }
+  const childPid = child.pid;
+  const onExit = new Promise<number | null>((resolve) => {
+    child.on("exit", (code) => {
+      try { setExitCode(PROJECT, name, code ?? null); } catch { /* removed */ }
+      resolve(code ?? null);
+    });
   });
-  child.unref();
+
+  const childRef = child;
+  return {
+    pid: childPid,
+    spawnMode,
+    logFile,
+    effectiveCwd,
+    envKeys,
+    onExit,
+    detach: () => { try { childRef.unref(); } catch { /* already detached */ } },
+    kill: () => { try { killProcessTree(childPid); } catch { /* already dead */ } },
+  };
+}
+
+function formatSpawnModeTag(mode: SpawnMode): string {
+  if (mode === "direct") return "direct";
+  if (mode === "shell") return "via shell";
+  return "via pty";
+}
+
+// ── bg_run ───────────────────────────────────────────────────────
+
+export function bgRun(
+  name: string, command: string, intent: string,
+  triggers?: TriggerConfig,
+  workingDir?: string,
+  env?: Record<string, string>,
+): string {
+  name = sanitizeName(name);
+
+  // Check if name already in use
+  const existing = getProcess(PROJECT, name);
+  if (existing && isAlive(existing.pid)) {
+    return `Error: process "${name}" is already running (PID ${existing.pid}). Kill it first with bg_kill.`;
+  }
+
+  const envVarsJson = env && Object.keys(env).length > 0 ? JSON.stringify(env) : null;
+
+  let spawned: SpawnedProcess;
+  try {
+    spawned = spawnProcess(name, command, workingDir, env);
+  } catch (e: any) {
+    return `Error: ${e.message}`;
+  }
+
+  // Detach — background process outlives the MCP server
+  spawned.detach();
 
   addProcess({
     name,
     project: PROJECT,
-    pid: child.pid,
+    pid: spawned.pid,
     command,
     intent,
-    log_file: logFile,
+    log_file: spawned.logFile,
     started_at: new Date().toISOString(),
-    cwd: effectiveCwd,
+    cwd: spawned.effectiveCwd,
     env_vars: envVarsJson,
     exit_code: null,
+    mode: "bg",
   });
 
-  if (triggers) registerTriggers(PROJECT, name, child.pid, logFile, triggers);
+  if (triggers) registerTriggers(PROJECT, name, spawned.pid, spawned.logFile, triggers);
 
-  const modeTag = spawnMode === "direct" ? "direct" : "via shell";
-  return `Started "${name}" (PID ${child.pid}, ${modeTag})\n  Command: ${command}\n  Intent: ${intent}${formatRunNotes(effectiveCwd, envKeys)}\n  Log: ${logFile}`;
+  const modeTag = formatSpawnModeTag(spawned.spawnMode);
+  return `Started "${name}" (PID ${spawned.pid}, ${modeTag})\n  Command: ${command}\n  Intent: ${intent}${formatRunNotes(spawned.effectiveCwd, spawned.envKeys)}\n  Log: ${spawned.logFile}`;
+}
+
+// ── sync_run ─────────────────────────────────────────────────────
+
+// ── Shared log reader (read_log + sync_run) ───────────────────────
+
+interface ReadLogOpts {
+  /** Last N lines to keep after filter (default 50, max 1000). */
+  lines?: number;
+  /** If true, preserve ANSI color codes. Default false (strip). */
+  raw?: boolean;
+  /** Filter pattern(s). Substring match by default — switch to regex with filterRegex=true. */
+  filter?: string | string[];
+  /** If true, treat `filter` entries as regex patterns instead of substrings. Case-insensitive. */
+  filterRegex?: boolean;
+  /** Max bytes to read from disk (default 64KB). Oversized logs are tail-truncated. */
+  maxBytes?: number;
+}
+
+interface ReadLogResult {
+  /** Final text (lines joined), possibly stripped and filtered. */
+  content: string;
+  /** Total file size on disk (bytes). */
+  totalSize: number;
+  /** True if the file was larger than maxBytes (we only read the tail). */
+  truncatedRead: boolean;
+  /** How many lines matched the filter before the `lines` cap was applied. */
+  matchedLines: number;
+  /** How many lines are in `content` (after the `lines` cap). */
+  returnedLines: number;
+  /** Set when filter regex compilation failed — caller should return this as an error. */
+  regexError?: string;
+}
+
+/**
+ * Read a log file tail, apply optional substring filter, cap to last N lines,
+ * optionally strip ANSI. Shared between `read_log` and `sync_run` so both tools
+ * expose the same filtering semantics.
+ *
+ * Read order:
+ *   1. Read last `maxBytes` bytes from disk, trimmed to a line boundary.
+ *   2. Split into lines.
+ *   3. If filter is set, drop non-matching lines (matched against ANSI-stripped text).
+ *   4. Take the last `lines` entries.
+ *   5. If not raw, strip ANSI from the final output.
+ */
+function readLogFiltered(logFile: string, opts: ReadLogOpts = {}): ReadLogResult {
+  const lines = Math.max(1, Math.min(1000, opts.lines ?? 50));
+  const raw = opts.raw ?? false;
+  const maxBytes = Math.max(1024, Math.min(1024 * 1024, opts.maxBytes ?? 65536));
+
+  if (!existsSync(logFile)) {
+    return { content: "", totalSize: 0, truncatedRead: false, matchedLines: 0, returnedLines: 0 };
+  }
+
+  const stat = statSync(logFile);
+  let content: string;
+  let truncatedRead = false;
+  if (stat.size > maxBytes) {
+    truncatedRead = true;
+    const fd = openSync(logFile, "r");
+    try {
+      const buf = Buffer.alloc(maxBytes);
+      readSync(fd, buf, 0, maxBytes, stat.size - maxBytes);
+      content = buf.toString("utf-8");
+      const firstNewline = content.indexOf("\n");
+      if (firstNewline > 0) content = content.slice(firstNewline + 1);
+    } finally {
+      closeSync(fd);
+    }
+  } else {
+    content = readFileSync(logFile, "utf-8");
+  }
+
+  let allLines = content.split("\n");
+
+  // Apply filter — match against stripped text so ANSI codes don't interfere.
+  // Default = case-insensitive substring. With filterRegex=true each entry is a regex.
+  if (opts.filter) {
+    const patterns = (Array.isArray(opts.filter) ? opts.filter : [opts.filter]).filter(p => p.length > 0);
+    if (patterns.length > 0) {
+      if (opts.filterRegex) {
+        const compiled: RegExp[] = [];
+        for (const p of patterns) {
+          try {
+            compiled.push(new RegExp(p, "i"));
+          } catch (e: any) {
+            return {
+              content: "",
+              totalSize: stat.size,
+              truncatedRead,
+              matchedLines: 0,
+              returnedLines: 0,
+              regexError: `Invalid regex "${p}": ${e.message}`,
+            };
+          }
+        }
+        allLines = allLines.filter(line => {
+          const plain = stripAnsi(line);
+          return compiled.some(re => re.test(plain));
+        });
+      } else {
+        const lowerPatterns = patterns.map(p => p.toLowerCase());
+        allLines = allLines.filter(line => {
+          const plain = stripAnsi(line).toLowerCase();
+          return lowerPatterns.some(p => plain.includes(p));
+        });
+      }
+    }
+  }
+
+  const matchedLines = allLines.length;
+  const tailLines = allLines.slice(-lines);
+  let tail = tailLines.join("\n");
+  if (!raw) tail = stripAnsi(tail);
+
+  return {
+    content: tail,
+    totalSize: stat.size,
+    truncatedRead,
+    matchedLines,
+    returnedLines: tailLines.length,
+  };
+}
+
+export interface SyncRunOpts {
+  /** Seconds before converting to background (default 30, clamped 1-3600). */
+  timeoutSec?: number;
+  workingDir?: string;
+  env?: Record<string, string>;
+  /** Last N lines of output to return (default 200, max 1000). */
+  lines?: number;
+  /** If true, preserve ANSI color codes in returned output (default false). */
+  raw?: boolean;
+  /** Filter pattern(s) — same semantics as read_log. Default: case-insensitive substring. */
+  filter?: string | string[];
+  /** If true, treat filter entries as regex patterns (case-insensitive). */
+  filterRegex?: boolean;
+  /** Max bytes of log tail to read from disk (default 256KB, max 1MB). */
+  maxBytes?: number;
+}
+
+export async function syncRun(
+  name: string, command: string, intent: string,
+  opts: SyncRunOpts = {},
+): Promise<string> {
+  name = sanitizeName(name);
+  const timeoutSec = Math.max(1, Math.min(3600, opts.timeoutSec ?? 30));
+  const maxBytes = Math.max(1024, Math.min(1024 * 1024, opts.maxBytes ?? 256 * 1024));
+  const lines = Math.max(1, Math.min(1000, opts.lines ?? 200));
+  const raw = opts.raw ?? false;
+
+  // Check if name already in use
+  const existing = getProcess(PROJECT, name);
+  if (existing && isAlive(existing.pid)) {
+    return `Error: process "${name}" is already running (PID ${existing.pid}). Kill it first with bg_kill.`;
+  }
+
+  const envVarsJson = opts.env && Object.keys(opts.env).length > 0 ? JSON.stringify(opts.env) : null;
+
+  let spawned: SpawnedProcess;
+  try {
+    spawned = spawnProcess(name, command, opts.workingDir, opts.env);
+  } catch (e: any) {
+    return `Error: ${e.message}`;
+  }
+
+  // Register immediately as 'sync' — visible in dashboard while running
+  addProcess({
+    name,
+    project: PROJECT,
+    pid: spawned.pid,
+    command,
+    intent,
+    log_file: spawned.logFile,
+    started_at: new Date().toISOString(),
+    cwd: spawned.effectiveCwd,
+    env_vars: envVarsJson,
+    exit_code: null,
+    mode: "sync",
+  });
+
+  const started = Date.now();
+
+  // Race: process exit vs. timeout
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    timeoutHandle = setTimeout(() => resolve("timeout"), timeoutSec * 1000);
+  });
+  const exitPromise = spawned.onExit.then((code) => ({ exited: true as const, code }));
+
+  const result = await Promise.race([exitPromise, timeoutPromise]);
+  const durationMs = Date.now() - started;
+  const modeTag = formatSpawnModeTag(spawned.spawnMode);
+  const readOpts: ReadLogOpts = { lines, raw, filter: opts.filter, filterRegex: opts.filterRegex, maxBytes };
+
+  const filterLabel = opts.filter
+    ? Array.isArray(opts.filter) ? opts.filter.join(", ") : opts.filter
+    : "";
+  const filterNote = opts.filter
+    ? ` [${opts.filterRegex ? "regex" : "filter"}: ${filterLabel}]`
+    : "";
+
+  if (result === "timeout") {
+    // Converted to background — process keeps running, stays in registry.
+    // Detach so Node won't wait for it on MCP server shutdown.
+    spawned.detach();
+    // Don't clear the timeout handle — it already fired.
+    const tail = readLogFiltered(spawned.logFile, readOpts);
+    if (tail.regexError) {
+      return `sync_run "${name}" (PID ${spawned.pid}) converted to background after ${timeoutSec}s, but filter regex was invalid: ${tail.regexError}\n  Re-read with read_log name="${name}" and a valid pattern.`;
+    }
+    const matchNote = opts.filter ? `, ${tail.matchedLines} matched` : "";
+    const header =
+      `sync_run "${name}" (PID ${spawned.pid}, ${modeTag}) DID NOT FINISH within ${timeoutSec}s — converted to background.\n` +
+      `  Command: ${command}\n  Intent: ${intent}${formatRunNotes(spawned.effectiveCwd, spawned.envKeys)}\n` +
+      `  Log: ${spawned.logFile}\n` +
+      `  Follow with: read_log name="${name}"  |  stop with: bg_kill name="${name}"\n` +
+      `  Partial output (${tail.totalSize}B on disk${tail.truncatedRead ? ", tail-truncated" : ""}${matchNote}${filterNote}, last ${tail.returnedLines} lines):\n\n`;
+    return header + (tail.content || "(no output yet)");
+  }
+
+  // Process exited within timeout window
+  if (timeoutHandle) clearTimeout(timeoutHandle);
+  const tail = readLogFiltered(spawned.logFile, readOpts);
+  if (tail.regexError) {
+    return `sync_run "${name}" (PID ${spawned.pid}) completed in ${durationMs}ms with exit ${result.code ?? "unknown"}, but filter regex was invalid: ${tail.regexError}\n  Re-read with read_log name="${name}" and a valid pattern.`;
+  }
+  const exitStr = result.code !== null ? String(result.code) : "unknown";
+  const matchNote = opts.filter ? `, ${tail.matchedLines} matched` : "";
+  const sizeNote = tail.truncatedRead ? `, tail-truncated to ${maxBytes}B` : "";
+  // Hint the agent about re-filtering when the filter dropped a lot or the tail was truncated.
+  // This reminds the LLM the log is persisted and can be re-read without re-running the command.
+  const rereadHint =
+    (opts.filter && tail.matchedLines > tail.returnedLines) || tail.truncatedRead
+      ? `\n  Re-filter without re-running: read_log name="${name}" filter="..." lines=... (log is persisted)`
+      : `\n  Re-read with different filter: read_log name="${name}" filter="..." (log is persisted at path above)`;
+  const header =
+    `sync_run "${name}" (PID ${spawned.pid}, ${modeTag}) completed in ${durationMs}ms, exit ${exitStr}.\n` +
+    `  Command: ${command}\n  Intent: ${intent}${formatRunNotes(spawned.effectiveCwd, spawned.envKeys)}\n` +
+    `  Log: ${spawned.logFile}${rereadHint}\n` +
+    `  Output (${tail.totalSize}B on disk${sizeNote}${matchNote}${filterNote}, last ${tail.returnedLines} lines):\n\n`;
+  return header + (tail.content || "(no output)");
 }
 
 // ── bg_list ──────────────────────────────────────────────────────
@@ -282,16 +574,16 @@ export function bgKill(name: string): string {
   return `Killed "${name}" (PID ${entry.pid}) and removed from registry.`;
 }
 
-// ── bg_logs ──────────────────────────────────────────────────────
+// ── read_log ──────────────────────────────────────────────────────
 
-export function bgLogs(
+export function readLog(
   name: string,
   lines: number = 50,
   raw: boolean = false,
   filter?: string | string[],
+  filterRegex: boolean = false,
 ): string {
   name = sanitizeName(name);
-  lines = Math.max(1, Math.min(1000, lines));
   const entry = getProcess(PROJECT, name);
 
   if (!entry) {
@@ -303,53 +595,19 @@ export function bgLogs(
   }
 
   try {
-    const stat = statSync(entry.log_file);
     const alive = isAlive(entry.pid);
     const status = alive ? "ALIVE" : "DEAD";
-    const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
+    const result = readLogFiltered(entry.log_file, { lines, raw, filter, filterRegex });
+    if (result.regexError) return `Error: ${result.regexError}`;
+    const sizeMB = (result.totalSize / 1024 / 1024).toFixed(1);
 
-    const MAX_READ = 64 * 1024;
-    let content: string;
-    if (stat.size > MAX_READ) {
-      const fd = openSync(entry.log_file, "r");
-      try {
-        const buf = Buffer.alloc(MAX_READ);
-        readSync(fd, buf, 0, MAX_READ, stat.size - MAX_READ);
-        content = buf.toString("utf-8");
-        const firstNewline = content.indexOf("\n");
-        if (firstNewline > 0) content = content.slice(firstNewline + 1);
-      } finally {
-        closeSync(fd);
-      }
-    } else {
-      content = readFileSync(entry.log_file, "utf-8");
-    }
-
-    let allLines = content.split("\n");
-
-    // Apply filter(s) — match against stripped text so ANSI codes don't interfere
-    if (filter) {
-      const patterns = Array.isArray(filter) ? filter : [filter];
-      const lowerPatterns = patterns.filter(p => p.length > 0).map(p => p.toLowerCase());
-      if (lowerPatterns.length > 0) {
-        allLines = allLines.filter(line => {
-          const plain = stripAnsi(line).toLowerCase();
-          return lowerPatterns.some(p => plain.includes(p));
-        });
-      }
-    }
-
-    let tail = allLines.slice(-lines).join("\n");
-
-    // Strip ANSI by default (raw=true preserves them)
-    if (!raw) {
-      tail = stripAnsi(tail);
-    }
-
-    const filterNote = filter
-      ? ` [filter: ${Array.isArray(filter) ? filter.join(", ") : filter}]`
+    const filterLabel = filter
+      ? Array.isArray(filter) ? filter.join(", ") : filter
       : "";
-    return `[${entry.name}] (PID ${entry.pid}, ${status}, ${sizeMB}MB) — last ${lines} lines${filterNote}:\n\n${tail}`;
+    const filterNote = filter
+      ? ` [${filterRegex ? "regex" : "filter"}: ${filterLabel}, ${result.matchedLines} matched]`
+      : "";
+    return `[${entry.name}] (PID ${entry.pid}, ${status}, ${sizeMB}MB) — last ${result.returnedLines} lines${filterNote}:\n\n${result.content}`;
   } catch (e: any) {
     return `Error reading log: ${e.message}`;
   }

@@ -15,6 +15,7 @@ export interface ProcessRow {
   cwd: string;
   env_vars: string | null;  // JSON-encoded user-provided extras, null when not set
   exit_code: number | null; // null while alive or if exit code unknown
+  mode: "bg" | "sync";      // 'bg' = bg_run, 'sync' = sync_run (may convert to bg on timeout)
 }
 
 /** ProcessRow enriched with live status. */

@@ -6,9 +6,10 @@
  *
  * Tools:
  *   bg_run(name, command, intent, triggers?, working_dir?, env?)  — spawn a background process with auto-logging
+ *   sync_run(name, command, intent, timeout_sec?, working_dir?, env?, lines?, raw?, filter?, filter_regex?, max_bytes?)  — run synchronously, convert to bg on timeout
  *   bg_list()                       — list all tracked processes with status
  *   bg_kill(name)                   — kill a tracked process by name
- *   bg_logs(name, lines?, raw?, filter?) — read last N lines from a process log
+ *   read_log(name, lines?, raw?, filter?, filter_regex?) — read and filter a process log
  *   bg_port_check(port)             — check what's listening on a port
  *   bg_port_kill(port)              — kill whatever is listening on a port
  *   bg_cleanup()                    — remove dead entries from registry
@@ -24,7 +25,7 @@ import {
 import { ensureDb, closeDb, DB_PATH } from "./db.js";
 import { migrateFromJson } from "./migrate.js";
 import { startHttpServer, shutdownHttpServer } from "./server.js";
-import { setProjectRoot, bgRun, bgList, bgKill, bgLogs, bgPortCheck, bgPortKill, bgCleanup } from "./tools.js";
+import { setProjectRoot, bgRun, syncRun, bgList, bgKill, readLog, bgPortCheck, bgPortKill, bgCleanup } from "./tools.js";
 import { drainPendingEvents, setServer } from "./notifier.js";
 import { shutdownAllTriggers } from "./trigger-monitor.js";
 
@@ -42,6 +43,7 @@ const server = new Server(
       "Background process manager for Windows with a live web dashboard.\n" +
       "Dashboard: http://127.0.0.1:7890 (port may increment — use bg_status for actual URL).\n" +
       "ALWAYS use bg_run instead of bash '&' or run_in_background.\n" +
+      "ALWAYS use sync_run instead of redirecting output to temp files for one-off commands — it returns full output + exit code, and converts to background if it exceeds timeout.\n" +
       "BEFORE starting any process, run bg_list to check what's already running.\n\n" +
       "AGENT NOTES (Windows execution environment):\n" +
       "- Env vars come from the IDE that spawned bg-manager (VSCODE_*, CURSOR_*, ELECTRON_*, etc.), NOT the user's interactive terminal. PATH may differ.\n" +
@@ -137,11 +139,76 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "sync_run",
+      description:
+        "Run a command synchronously and return its captured output + exit code + duration when it finishes.\n" +
+        "- USE THIS INSTEAD of redirecting output to temp files. Patterns like 'cmd > /tmp/out.log 2>&1 && cat /tmp/out.log' are BANNED — sync_run captures stdout+stderr reliably, returns the exit code, and never leaves orphaned temp files.\n" +
+        "- Same spawn engine as bg_run (direct / shell fallback, ConPTY for wippy, same env defaults, same PYTHONUTF8 detection). Same working_dir / env params.\n" +
+        "- If the command doesn't finish within timeout_sec, it is AUTOMATICALLY CONVERTED to a background process and a partial-output response is returned. Watch further progress with read_log name=<name>, stop it with bg_kill.\n" +
+        "- Accepts the SAME log-filtering params as read_log (lines, raw, filter) — use 'filter' to grep the output for patterns like 'error', 'FAIL', etc. Case-insensitive substring match.\n" +
+        "- **FULL OUTPUT IS PERSISTED TO DISK** at ~/.bg-manager/logs/<slug>-<name>.log and the registry entry stays after completion. This means: if your filter returned too few results, or you want to see different lines, or you got the tail but need to search for something else — **DO NOT RE-RUN THE COMMAND**. Call read_log(name=<same name>, filter=..., lines=...) to re-filter the already-captured output. read_log and sync_run share the exact same filtering semantics, so anything you can do in one you can do in the other.\n" +
+        "- Sync runs show up in the dashboard tagged SYNC. Clear finished entries with bg_cleanup.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Short unique name for this run (e.g., 'build', 'test-unit'). Used for log file + registry.",
+          },
+          command: {
+            type: "string",
+            description: "Command to run. Simple commands spawn directly. Shell metacharacters (|, &, ;, >) trigger Git Bash.",
+          },
+          intent: {
+            type: "string",
+            description: "Brief description of why this is being run",
+          },
+          timeout_sec: {
+            type: "number",
+            description: "Seconds to wait before converting to background (default 30, max 3600). Set higher for long-running commands; the auto-conversion means you don't have to get this exactly right.",
+          },
+          working_dir: {
+            type: "string",
+            description: "Working directory (absolute path). Defaults to project root.",
+          },
+          env: {
+            type: "object",
+            description: "Extra environment variables. Merged on top of defaults; user keys win.",
+            additionalProperties: { type: "string" },
+          },
+          lines: {
+            type: "number",
+            description: "Last N lines of output to return (default 200, max 1000). Applied AFTER filter so you get the last N matching lines.",
+          },
+          raw: {
+            type: "boolean",
+            description: "If true, preserve ANSI color codes in the returned output. Default: false (stripped).",
+          },
+          filter: {
+            oneOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } },
+            ],
+            description: "Show only output lines matching this pattern (or any of these). Case-insensitive. Matching is done against ANSI-stripped text. Default: substring. Use filter_regex=true for regex patterns like '^FAIL' or '\\\\berror\\\\b'.",
+          },
+          filter_regex: {
+            type: "boolean",
+            description: "If true, treat each filter entry as a case-insensitive regex. Default: false (substring match).",
+          },
+          max_bytes: {
+            type: "number",
+            description: "Max bytes of log tail to read from disk before filtering (default 262144 = 256KB, max 1MB). Oversized logs are trimmed to a line boundary. Increase for very chatty commands.",
+          },
+        },
+        required: ["name", "command", "intent"],
+      },
+    },
+    {
       name: "bg_list",
       description:
         "List all tracked processes with status (ALIVE/DEAD), PID, command, intent, log path.\n" +
         "- ALIVE = process still running. DEAD = exited (may have succeeded or failed).\n" +
-        "- Short-lived commands (builds, probes) go DEAD quickly — check bg_logs for output.",
+        "- Short-lived commands (builds, probes) go DEAD quickly — check read_log for output.",
       inputSchema: { type: "object" as const, properties: {} },
     },
     {
@@ -159,12 +226,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "bg_logs",
+      name: "read_log",
       description:
-        "Read the last N lines from a process log file.\n" +
+        "Read and filter the log of ANY tracked process — both bg_run (background processes) and sync_run (synchronous runs). General-purpose log reader.\n" +
+        "- **Works on completed sync_run entries too.** After a sync_run finishes, its full output stays on disk. If you want to re-examine it with a different filter or see more/fewer lines — DO NOT re-run the command. Call read_log with the same name and new filter/lines params. Same filter semantics as sync_run, so anything that works in one works here.\n" +
+        "- Tails the last N lines (default 50, max 1000). Large files (>64KB) are automatically trimmed to the tail.\n" +
         "- ANSI color codes stripped by default; raw=true preserves them.\n" +
-        "- Empty output = process printed nothing to stdout/stderr (check quoting, buffering, or if process exited immediately).\n" +
-        "- Use filter to search for specific strings in the output.",
+        "- Use filter to grep the output. Default: case-insensitive substring (single string or array-OR). Set filter_regex=true to treat each filter entry as a case-insensitive regex — enables patterns like '^FAIL', '\\\\berror\\\\b', 'warn.*deprecated'.\n" +
+        "- Filter is applied BEFORE the 'lines' cap, so you get the last N matching lines. The response header shows 'N matched' so you know if your filter caught more than you see.\n" +
+        "- Empty output = process printed nothing to stdout/stderr (check quoting, buffering, or if the process exited immediately).",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -174,7 +244,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           lines: {
             type: "number",
-            description: "Number of lines to return (default: 50)",
+            description: "Number of lines to return (default: 50, max: 1000)",
           },
           raw: {
             type: "boolean",
@@ -185,7 +255,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               { type: "string" },
               { type: "array", items: { type: "string" } },
             ],
-            description: "Show only lines containing this string (or any of these strings). Case-insensitive. Matching is done against stripped text.",
+            description: "Show only lines matching this pattern (or any of these patterns). Case-insensitive. Matching is done against ANSI-stripped text. Default mode is substring; set filter_regex=true for regex.",
+          },
+          filter_regex: {
+            type: "boolean",
+            description: "If true, treat each filter entry as a case-insensitive regex pattern (e.g., '^ERROR', '\\\\bwarn\\\\b', 'failed.*timeout'). Default: false (substring match).",
           },
         },
         required: ["name"],
@@ -248,18 +322,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         (args as any).env,
       );
       break;
+    case "sync_run":
+      result = await syncRun(
+        (args as any).name,
+        (args as any).command,
+        (args as any).intent,
+        {
+          timeoutSec: (args as any).timeout_sec,
+          workingDir: (args as any).working_dir,
+          env: (args as any).env,
+          lines: (args as any).lines,
+          raw: (args as any).raw,
+          filter: (args as any).filter,
+          filterRegex: (args as any).filter_regex,
+          maxBytes: (args as any).max_bytes,
+        },
+      );
+      break;
     case "bg_list":
       result = bgList();
       break;
     case "bg_kill":
       result = bgKill((args as any).name);
       break;
-    case "bg_logs":
-      result = bgLogs(
+    case "read_log":
+      result = readLog(
         (args as any).name,
         (args as any).lines ?? 50,
         (args as any).raw ?? false,
         (args as any).filter,
+        (args as any).filter_regex ?? false,
       );
       break;
     case "bg_port_check":

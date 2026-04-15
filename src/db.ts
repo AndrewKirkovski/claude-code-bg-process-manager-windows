@@ -70,6 +70,7 @@ export function ensureDb(): void {
       cwd         TEXT    NOT NULL,
       env_vars    TEXT,
       exit_code   INTEGER,
+      mode        TEXT    NOT NULL DEFAULT 'bg',
       UNIQUE(project, name)
     );
 
@@ -82,7 +83,7 @@ export function ensureDb(): void {
   // Schema version tracking & migrations
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined;
   if (!row) {
-    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '3')").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', '4')").run();
   } else {
     const version = parseInt(row.value, 10);
     if (version < 2) {
@@ -90,7 +91,12 @@ export function ensureDb(): void {
     }
     if (version < 3) {
       db.exec("ALTER TABLE processes ADD COLUMN exit_code INTEGER");
-      db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
+    }
+    if (version < 4) {
+      db.exec("ALTER TABLE processes ADD COLUMN mode TEXT NOT NULL DEFAULT 'bg'");
+    }
+    if (version < 4) {
+      db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema_version'").run();
     }
   }
 }
@@ -99,9 +105,9 @@ export function ensureDb(): void {
 
 export function addProcess(entry: Omit<ProcessRow, "id">): void {
   getDb().prepare(`
-    INSERT OR REPLACE INTO processes (name, project, pid, command, intent, log_file, started_at, cwd, env_vars, exit_code)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(entry.name, entry.project, entry.pid, entry.command, entry.intent, entry.log_file, entry.started_at, entry.cwd, entry.env_vars, entry.exit_code);
+    INSERT OR REPLACE INTO processes (name, project, pid, command, intent, log_file, started_at, cwd, env_vars, exit_code, mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(entry.name, entry.project, entry.pid, entry.command, entry.intent, entry.log_file, entry.started_at, entry.cwd, entry.env_vars, entry.exit_code, entry.mode);
 }
 
 export function setExitCode(project: string, name: string, exitCode: number | null): void {
