@@ -4,7 +4,7 @@
  */
 
 import { watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "fs";
-import { isAlive, stripAnsi } from "./process-utils.js";
+import { isEntryAlive, stripAnsi } from "./process-utils.js";
 import { queueTriggerEvent } from "./notifier.js";
 import { getProcess } from "./db.js";
 import type { TriggerConfig, TriggerState } from "./types.js";
@@ -53,11 +53,18 @@ function startDeathMonitor(key: string, project: string, pid: number, processNam
   if (!handle) return;
 
   handle.deathTimer = setInterval(() => {
-    if (!isAlive(pid)) {
+    const entry = getProcess(project, processName);
+    // Entry removed (e.g. bg_kill) — stop monitoring without firing.
+    if (!entry) {
+      clearInterval(handle.deathTimer!);
+      return;
+    }
+    // isEntryAlive trusts a recorded exit_code over the recycled-PID-prone
+    // process.kill(pid, 0) probe — see process-utils.ts.
+    if (!isEntryAlive(entry)) {
       handle.state.firedDead = true;
       clearInterval(handle.deathTimer!);
-      const entry = getProcess(project, processName);
-      const exitInfo = entry?.exit_code !== null && entry?.exit_code !== undefined
+      const exitInfo = entry.exit_code !== null
         ? ` with exit code ${entry.exit_code}` : "";
       queueTriggerEvent(
         processName, "dead",

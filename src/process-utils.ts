@@ -26,6 +26,74 @@ export function isAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Trustworthy liveness check for a tracked entry. If we recorded an exit_code,
+ * the spawn handler observed the child exit — definitively dead, regardless of
+ * what isAlive(pid) reports. Windows reuses PIDs quickly, so a stale PID may
+ * now belong to an unrelated process (Spotify, Chrome, etc.).
+ *
+ * Known gap: if bg-manager itself was killed/restarted between spawn and the
+ * child's exit, exit_code stays null indefinitely and we fall back to
+ * isAlive(pid) — which is the recycled-PID-prone check we're trying to avoid.
+ * The kill paths (bgKill, dashboard /kill) layer pidMatchesEntry on top to
+ * defend that gap. Other callers DO NOT:
+ *   - read paths (withStatus, bgList, readLog) accept the residual risk for
+ *     cheap reads — worst case is a stale ALIVE row in the dashboard;
+ *   - cleanupDead/cleanupAllDead also rely on this alone, so a stale entry
+ *     whose PID is recycled to an unrelated alive process will persist across
+ *     cleanups until that new owner exits.
+ *
+ * Falls back to isAlive(pid) only when exit_code is null (long-running bg
+ * process still running, or the gap above).
+ */
+export function isEntryAlive(entry: { pid: number; exit_code: number | null }): boolean {
+  if (entry.exit_code !== null) return false;
+  return isAlive(entry.pid);
+}
+
+/**
+ * Safeguard before killing a tracked PID. Verifies the running PID's
+ * CreationDate matches entry.started_at within a tolerance window, so we
+ * don't terminate an unrelated process that inherited a recycled PID.
+ *
+ * Returns true if the process exists and start times match. Returns false if
+ * the process is gone or appears to be a different one. On non-Windows or if
+ * the WMI probe fails, returns true (Linux PID reuse is far slower; allow
+ * the kill to proceed).
+ *
+ * Tolerance is 30s: started_at is recorded *after* spawn() resolves, while
+ * the OS CreationDate is when the process was actually created. On a slow
+ * cold start (Windows + antivirus + npm/node_modules), the gap can exceed
+ * 10s; 30s absorbs that without weakening the safeguard meaningfully (a
+ * recycled PID would diverge by minutes/hours).
+ */
+export function pidMatchesEntry(entry: { pid: number; started_at: string }): boolean {
+  if (process.platform !== "win32") return true;
+  if (!isValidPid(entry.pid)) return false;
+
+  let out: string;
+  try {
+    // Get-CimInstance returns CreationDate as [DateTime] (not the legacy
+    // CIM_DATETIME string from Get-WmiObject), so .ToUniversalTime() works
+    // directly. If a future change switches providers, use $p.ConvertToDateTime()
+    // — [datetime] cast does NOT parse the CIM_DATETIME format.
+    out = execSync(
+      `powershell -NoProfile -c "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${entry.pid}' -ErrorAction SilentlyContinue; if ($p) { $p.CreationDate.ToUniversalTime().ToString('o') }"`,
+      { encoding: "utf-8", timeout: 5000 }
+    ).trim();
+  } catch {
+    return true; // probe failed — don't block kill
+  }
+
+  if (!out) return false; // PID no longer exists
+
+  const procStartMs = Date.parse(out);
+  const entryStartMs = Date.parse(entry.started_at);
+  if (isNaN(procStartMs) || isNaN(entryStartMs)) return true; // can't compare — allow
+
+  return Math.abs(procStartMs - entryStartMs) <= 30_000;
+}
+
 // ── ANSI stripping ──────────────────────────────────────────────
 
 export function stripAnsi(text: string): string {

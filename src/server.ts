@@ -9,7 +9,7 @@ import { statSync, openSync, readSync, closeSync, readFileSync, watchFile, unwat
 import { dirname, join, extname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { getAllProcesses, withStatus, getProcess, cleanupAllDead, removeProcess } from "./db.js";
-import { isAlive, killProcessTree } from "./process-utils.js";
+import { isEntryAlive, pidMatchesEntry, killProcessTree } from "./process-utils.js";
 import { getActiveTriggers } from "./trigger-monitor.js";
 
 // ── Dashboard static files ──────────────────────────────────────
@@ -154,7 +154,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
 
       try {
         const content = readLogTail(entry.log_file, clampedLines);
-        sendJson(res, 200, { name, project, content, alive: isAlive(entry.pid) });
+        sendJson(res, 200, { name, project, content, alive: isEntryAlive(entry) });
       } catch (e: any) {
         sendJson(res, 500, { error: e.message });
       }
@@ -175,11 +175,32 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
       const entry = getProcess(project, name);
       if (!entry) return sendJson(res, 404, { error: "Process not found" });
 
-      if (isAlive(entry.pid)) {
-        killProcessTree(entry.pid);
+      // Two-stage safety: trust recorded exit_code first (cheap), then verify
+      // PID identity via WMI start time before killing (defends against PID
+      // reuse — Windows can hand a recycled PID to an unrelated process).
+      let killed = false;
+      let reason: string | undefined;
+      try {
+        if (isEntryAlive(entry)) {
+          if (pidMatchesEntry(entry)) {
+            killProcessTree(entry.pid);
+            killed = true;
+          } else {
+            reason = "pid_recycled";
+            process.stderr.write(`bg-manager: skipped kill ${project}/${name} pid=${entry.pid} reason=pid_recycled\n`);
+          }
+        } else {
+          reason = "already_exited";
+          process.stderr.write(`bg-manager: skipped kill ${project}/${name} pid=${entry.pid} reason=already_exited\n`);
+        }
+        // If removeProcess throws after a successful kill, the process is
+        // gone but the registry row remains — bg_list / cleanup will reap it.
+        removeProcess(project, name);
+        sendJson(res, 200, { killed, name, pid: entry.pid, reason });
+      } catch (e: any) {
+        process.stderr.write(`bg-manager: kill failed ${project}/${name} pid=${entry.pid}: ${e.message}\n`);
+        sendJson(res, 500, { killed: false, error: e.message, name, pid: entry.pid });
       }
-      removeProcess(project, name);
-      sendJson(res, 200, { killed: true, name, pid: entry.pid });
       // Broadcast update
       setTimeout(broadcastProcessList, 200);
       return;

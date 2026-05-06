@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { isAlive } from "./process-utils.js";
+import { isEntryAlive } from "./process-utils.js";
 import type { ProcessRow, ProcessWithStatus } from "./types.js";
 
 // ── Paths ────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ export function getAllProcesses(): ProcessRow[] {
 
 /** Enrich rows with live alive status. */
 export function withStatus(rows: ProcessRow[]): ProcessWithStatus[] {
-  return rows.map(r => ({ ...r, alive: isAlive(r.pid) }));
+  return rows.map(r => ({ ...r, alive: isEntryAlive(r) }));
 }
 
 export function cleanupDead(project: string): { removed: ProcessRow[]; aliveCount: number } {
@@ -141,7 +141,7 @@ export function cleanupDead(project: string): { removed: ProcessRow[]; aliveCoun
   let aliveCount = 0;
 
   for (const r of rows) {
-    if (isAlive(r.pid)) {
+    if (isEntryAlive(r)) {
       aliveCount++;
     } else {
       dead.push(r);
@@ -166,7 +166,7 @@ export function cleanupAllDead(): { removed: ProcessRow[]; aliveCount: number } 
   let aliveCount = 0;
 
   for (const r of rows) {
-    if (isAlive(r.pid)) {
+    if (isEntryAlive(r)) {
       aliveCount++;
     } else {
       dead.push(r);

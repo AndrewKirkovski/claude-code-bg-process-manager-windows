@@ -10,7 +10,7 @@ import { existsSync, statSync, openSync, readSync, closeSync, readFileSync, crea
 import { join, isAbsolute } from "path";
 import * as nodePty from "node-pty";
 import {
-  isAlive, sanitizeName, parseSimpleCommand, findBashPath,
+  isAlive, isEntryAlive, pidMatchesEntry, sanitizeName, parseSimpleCommand, findBashPath,
   parseNetstat, findTrackedEntry, killProcessTree, stripAnsi,
   commandRunsPython,
 } from "./process-utils.js";
@@ -235,7 +235,7 @@ export function bgRun(
 
   // Check if name already in use
   const existing = getProcess(PROJECT, name);
-  if (existing && isAlive(existing.pid)) {
+  if (existing && isEntryAlive(existing)) {
     return `Error: process "${name}" is already running (PID ${existing.pid}). Kill it first with bg_kill.`;
   }
 
@@ -423,7 +423,7 @@ export async function syncRun(
 
   // Check if name already in use
   const existing = getProcess(PROJECT, name);
-  if (existing && isAlive(existing.pid)) {
+  if (existing && isEntryAlive(existing)) {
     return `Error: process "${name}" is already running (PID ${existing.pid}). Kill it first with bg_kill.`;
   }
 
@@ -522,7 +522,7 @@ export function bgList(): string {
 
   const lines: string[] = [];
   for (const entry of rows) {
-    const alive = isAlive(entry.pid);
+    const alive = isEntryAlive(entry);
     const exitStr = !alive && entry.exit_code !== null ? ` (exit ${entry.exit_code})` : "";
     const status = alive ? "ALIVE" : `DEAD${exitStr}`;
     const cwdLine = entry.cwd !== PROJECT_ROOT ? `\n         CWD:     ${entry.cwd}` : "";
@@ -555,10 +555,21 @@ export function bgKill(name: string): string {
     return `No process found with name "${name}". Use bg_list to see tracked processes.`;
   }
 
-  if (!isAlive(entry.pid)) {
+  if (!isEntryAlive(entry)) {
+    process.stderr.write(`bg-manager: skipped kill ${PROJECT}/${name} pid=${entry.pid} reason=already_exited\n`);
     unregisterTriggers(PROJECT, name);
     removeProcess(PROJECT, name);
     return `Process "${name}" (PID ${entry.pid}) is already dead. Removed from registry.`;
+  }
+
+  // Final safeguard: verify the running PID still belongs to this entry.
+  // Windows recycles PIDs aggressively — without this, we could kill an
+  // unrelated process that inherited the PID.
+  if (!pidMatchesEntry(entry)) {
+    process.stderr.write(`bg-manager: skipped kill ${PROJECT}/${name} pid=${entry.pid} reason=pid_recycled\n`);
+    unregisterTriggers(PROJECT, name);
+    removeProcess(PROJECT, name);
+    return `Process "${name}" (PID ${entry.pid}) appears to have exited (PID now belongs to a different process). Removed from registry without killing.`;
   }
 
   killProcessTree(entry.pid);
@@ -595,7 +606,7 @@ export function readLog(
   }
 
   try {
-    const alive = isAlive(entry.pid);
+    const alive = isEntryAlive(entry);
     const status = alive ? "ALIVE" : "DEAD";
     const result = readLogFiltered(entry.log_file, { lines, raw, filter, filterRegex });
     if (result.regexError) return `Error: ${result.regexError}`;
