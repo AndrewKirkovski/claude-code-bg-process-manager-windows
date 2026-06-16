@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ProcessWithStatus } from '@/types'
+import { detailRows, parseEnv } from '@/process-details'
 
 const props = defineProps<{
   process: ProcessWithStatus
@@ -34,13 +35,7 @@ const displayCwd = computed(() => {
   return parts.slice(-3).join('/')
 })
 
-const envEntries = computed(() => {
-  if (!props.process.env_vars) return []
-  let parsed: Record<string, string>
-  try { parsed = JSON.parse(props.process.env_vars) }
-  catch { throw new Error(`Corrupted env_vars for process "${props.process.name}": ${props.process.env_vars}`) }
-  return Object.entries(parsed)
-})
+const envEntries = computed(() => parseEnv(props.process))
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -52,37 +47,17 @@ const tooltipHtml = computed(() => {
   const exitColor = p.exit_code === 0 ? 'var(--color-exit-success)' : 'var(--color-exit-error)'
   const exitInfo = !p.alive && p.exit_code !== null
     ? ` <span style="color:${exitColor}">(exit ${p.exit_code})</span>` : ''
-  const statusText = p.alive ? 'ALIVE' : `COMPLETED${exitInfo}`
+  const statusLabel = p.alive ? 'ALIVE' : `COMPLETED${exitInfo}`
 
-  const row = (label: string, value: string) =>
+  const rows = detailRows(p).map(({ label, value }) =>
     `<tr><td style="color:var(--color-secondary);padding-right:8px;white-space:nowrap;vertical-align:top">${label}</td><td style="word-break:break-all">${esc(value)}</td></tr>`
-
-  let rows = ''
-  rows += row('PID', String(p.pid))
-  rows += row('Command', p.command)
-  rows += row('Intent', p.intent)
-  rows += row('CWD', p.cwd)
-  rows += row('Started', p.started_at)
-  rows += row('Log', p.log_file)
-  if (envEntries.value.length) {
-    rows += row('Env', envEntries.value.map(([k, v]) => `${k}=${v}`).join(', '))
-  }
-  const t = p.triggers
-  if (t) {
-    const parts: string[] = []
-    if (t.config.notifyDead !== false) parts.push('death')
-    if (t.config.notifyPort) parts.push('port')
-    if (t.config.notifyReady) parts.push('ready')
-    const pc = t.config.logTriggers?.length ?? 0
-    if (pc > 0) parts.push(`${pc} log pattern${pc > 1 ? 's' : ''}`)
-    if (parts.length) rows += row('Triggers', parts.join(', '))
-  }
+  ).join('')
 
   const modeTag = p.mode === 'sync'
     ? ` <span style="color:var(--color-accent);font-size:10px">[SYNC]</span>`
     : ''
   return `<div style="font-size:12px;line-height:1.5">` +
-    `<div style="font-weight:600;margin-bottom:4px">${esc(p.name)}${modeTag} <span style="color:${statusColor}">${statusText}</span></div>` +
+    `<div style="font-weight:600;margin-bottom:4px">${esc(p.name)}${modeTag} <span style="color:${statusColor}">${statusLabel}</span></div>` +
     `<table style="border-spacing:0">${rows}</table>` +
     `</div>`
 })

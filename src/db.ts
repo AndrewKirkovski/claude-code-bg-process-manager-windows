@@ -110,8 +110,12 @@ export function addProcess(entry: Omit<ProcessRow, "id">): void {
   `).run(entry.name, entry.project, entry.pid, entry.command, entry.intent, entry.log_file, entry.started_at, entry.cwd, entry.env_vars, entry.exit_code, entry.mode);
 }
 
-export function setExitCode(project: string, name: string, exitCode: number | null): void {
-  getDb().prepare("UPDATE processes SET exit_code = ? WHERE project = ? AND name = ?").run(exitCode, project, name);
+// PID-guarded: a process's exit handler may fire on a later tick, after the row
+// was already replaced by a same-name respawn (bg_restart, or re-running bg_run
+// with the same name). Matching `pid` ensures a stale exit can't clobber the
+// newer generation's row and mark a running process as dead.
+export function setExitCode(project: string, name: string, pid: number, exitCode: number | null): void {
+  getDb().prepare("UPDATE processes SET exit_code = ? WHERE project = ? AND name = ? AND pid = ?").run(exitCode, project, name, pid);
 }
 
 export function removeProcess(project: string, name: string): void {

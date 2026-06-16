@@ -5,10 +5,12 @@ import type { ProcessWithStatus } from '@/types'
 const props = defineProps<{
   processes: ProcessWithStatus[]
   filter: string
+  showClosed: boolean
 }>()
 
 const emit = defineEmits<{
   'update:filter': [value: string]
+  'update:showClosed': [value: boolean]
   cleanup: []
 }>()
 
@@ -40,6 +42,15 @@ function shortProject(p: string): string {
       <option value="">All projects</option>
       <option v-for="p in projects" :key="p" :value="p">{{ shortProject(p) }}</option>
     </select>
+    <label class="text-[13px] text-secondary flex items-center gap-1.5 cursor-pointer select-none">
+      <input
+        type="checkbox"
+        :checked="showClosed"
+        @change="emit('update:showClosed', ($event.target as HTMLInputElement).checked)"
+        class="cursor-pointer"
+      >
+      Show closed
+    </label>
     <button
       @click="emit('cleanup')"
       class="text-[13px] px-2.5 py-1 rounded-md border border-dead text-dead

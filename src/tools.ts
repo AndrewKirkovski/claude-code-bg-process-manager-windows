@@ -18,7 +18,7 @@ import {
   addProcess, removeProcess, getProcess, getProjectProcesses,
   getAllProcesses, cleanupDead, normalizeProject, projectSlug, setExitCode, LOGS_DIR,
 } from "./db.js";
-import { registerTriggers, unregisterTriggers } from "./trigger-monitor.js";
+import { registerTriggers, unregisterTriggers, getActiveTriggers } from "./trigger-monitor.js";
 import type { TriggerConfig } from "./types.js";
 
 // Current project context (set once at startup)
@@ -67,6 +67,7 @@ function spawnProcess(
   name: string, command: string,
   workingDir: string | undefined,
   env: Record<string, string> | undefined,
+  project: string = PROJECT,
 ): SpawnedProcess {
   // Validate working_dir
   if (workingDir) {
@@ -86,7 +87,7 @@ function spawnProcess(
   const effectiveCwd = workingDir || PROJECT_ROOT;
   const envKeys = env ? Object.keys(env) : [];
 
-  const slug = projectSlug(PROJECT);
+  const slug = projectSlug(project);
   const logFile = join(LOGS_DIR, `${slug}-${name}.log`);
 
   // Base env: inherit parent, set always-on defaults, optionally add PYTHONUTF8
@@ -125,7 +126,7 @@ function spawnProcess(
     const onExit = new Promise<number | null>((resolve) => {
       ptyProcess.onExit(({ exitCode }) => {
         logStream.end();
-        try { setExitCode(PROJECT, name, exitCode); } catch { /* removed */ }
+        try { setExitCode(project, name, ptyProcess.pid, exitCode); } catch { /* removed */ }
         resolve(exitCode ?? null);
       });
     });
@@ -199,7 +200,7 @@ function spawnProcess(
   const childPid = child.pid;
   const onExit = new Promise<number | null>((resolve) => {
     child.on("exit", (code) => {
-      try { setExitCode(PROJECT, name, code ?? null); } catch { /* removed */ }
+      try { setExitCode(project, name, childPid, code ?? null); } catch { /* removed */ }
       resolve(code ?? null);
     });
   });
@@ -583,6 +584,99 @@ export function bgKill(name: string): string {
     return `Kill signal sent to "${name}" (PID ${entry.pid}) but process may still be terminating. Removed from registry.`;
   }
   return `Killed "${name}" (PID ${entry.pid}) and removed from registry.`;
+}
+
+// ── restart (shared by dashboard endpoint + bg_restart tool) ──────
+
+export interface RestartResult {
+  ok: boolean;
+  pid?: number;
+  /** Set when the named entry doesn't exist (caller maps to 404). */
+  notFound?: boolean;
+  error?: string;
+}
+
+/**
+ * Restart a tracked process: kill it (if still running) and re-spawn with the
+ * SAME command, working dir and env captured in the registry. The dashboard
+ * lists processes across all projects, so the entry's own `project` is passed
+ * through to spawnProcess (log slug + exit-code tracking) rather than the MCP
+ * server's PROJECT.
+ *
+ * - Re-uses the same log path (truncated on respawn → fresh log).
+ * - In-memory trigger config is captured before the kill and re-applied to the
+ *   new PID (triggers aren't persisted in the DB).
+ * - Always respawns as a detached background process (mode "bg") — there is no
+ *   MCP caller awaiting it, so a former "sync" entry becomes "bg".
+ *
+ * Failure handling: anything that can be checked cheaply (corrupted env, missing
+ * working dir) is validated BEFORE the old process is killed, so a doomed restart
+ * leaves the running process untouched. If the respawn still throws after the kill
+ * (rare — e.g. shell missing), the old now-dead registry row remains for the user
+ * to clean up or retry.
+ */
+export function restartProcess(project: string, name: string): RestartResult {
+  const entry = getProcess(project, name);
+  if (!entry) return { ok: false, notFound: true, error: `No process found with name "${name}".` };
+
+  // Validate everything cheap BEFORE killing, so a restart that can't proceed
+  // doesn't destroy the still-running process.
+  let env: Record<string, string> | undefined;
+  try {
+    env = entry.env_vars ? JSON.parse(entry.env_vars) : undefined;
+  } catch {
+    return { ok: false, error: `Corrupted env_vars for process "${name}": ${entry.env_vars}` };
+  }
+  if (!existsSync(entry.cwd)) {
+    return { ok: false, error: `working_dir no longer exists: ${entry.cwd}` };
+  }
+
+  // Capture triggers before we tear the old monitor down.
+  const triggerConfig = getActiveTriggers(project, name)?.config;
+
+  // Kill the old instance — PID-verified to avoid killing a recycled PID.
+  if (isEntryAlive(entry) && pidMatchesEntry(entry)) {
+    killProcessTree(entry.pid);
+  }
+  unregisterTriggers(project, name);
+
+  let spawned: SpawnedProcess;
+  try {
+    spawned = spawnProcess(name, entry.command, entry.cwd, env, project);
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+
+  // Detach — restarted process outlives the MCP server.
+  spawned.detach();
+
+  addProcess({
+    name,
+    project,
+    pid: spawned.pid,
+    command: entry.command,
+    intent: entry.intent,
+    log_file: spawned.logFile,
+    started_at: new Date().toISOString(),
+    cwd: entry.cwd,
+    env_vars: entry.env_vars,
+    exit_code: null,
+    mode: "bg",
+  });
+
+  if (triggerConfig) registerTriggers(project, name, spawned.pid, spawned.logFile, triggerConfig);
+
+  return { ok: true, pid: spawned.pid };
+}
+
+export function bgRestart(name: string): string {
+  name = sanitizeName(name);
+  const result = restartProcess(PROJECT, name);
+  if (!result.ok) {
+    if (result.notFound) return `${result.error} Use bg_list to see tracked processes.`;
+    return `Error restarting "${name}": ${result.error}`;
+  }
+  return `Restarted "${name}" (new PID ${result.pid}). Log reset. Follow with: read_log name="${name}"`;
 }
 
 // ── read_log ──────────────────────────────────────────────────────

@@ -20,7 +20,11 @@ onMounted(() => {
     fontFamily: "'Fira Mono', Consolas, monospace",
     fontSize: 12,
     lineHeight: 1.0,
-    scrollback: 10000,
+    // Large scrollback so a full-log load isn't trimmed. xterm only paints the
+    // visible rows (virtualized renderer) but keeps scrollback lines in memory,
+    // so this is fine for typical dev logs. A truly unbounded log would need a
+    // custom byte-range windowed viewer (out of scope).
+    scrollback: 100000,
     convertEol: true,
     disableStdin: true,
     cursorStyle: 'bar',

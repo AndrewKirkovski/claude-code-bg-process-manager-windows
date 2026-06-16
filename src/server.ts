@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 import { getAllProcesses, withStatus, getProcess, cleanupAllDead, removeProcess } from "./db.js";
 import { isEntryAlive, pidMatchesEntry, killProcessTree } from "./process-utils.js";
 import { getActiveTriggers } from "./trigger-monitor.js";
+import { restartProcess } from "./tools.js";
 
 // ── Dashboard static files ──────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -50,7 +51,10 @@ function enrichWithTriggers(processes: ReturnType<typeof withStatus>) {
 const sseClients = new Set<http.ServerResponse>();
 let previousState = new Map<string, boolean>();
 
-function broadcastProcessList(): void {
+// `force` bypasses the alive/dead change-detection. Needed after a restart,
+// where the process stays ALIVE→ALIVE but its PID changes — a change the
+// alive-keyed diff can't see, so without forcing the dashboard keeps the stale PID.
+function broadcastProcessList(force = false): void {
   if (sseClients.size === 0) return;
 
   let processes;
@@ -68,7 +72,7 @@ function broadcastProcessList(): void {
     }
   }
 
-  if (changed) {
+  if (changed || force) {
     const payload = `event: process_list\ndata: ${JSON.stringify(enrichWithTriggers(processes))}\n\n`;
     for (const client of sseClients) {
       try { client.write(payload); } catch { sseClients.delete(client); }
@@ -149,11 +153,16 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
       if (!entry) return sendJson(res, 404, { error: "Process not found" });
       if (!existsSync(entry.log_file)) return sendJson(res, 404, { error: "Log file not found" });
 
+      // full=1 returns the entire log (no line clamp, no tail-byte cap) — used
+      // by the dashboard's full-history load and the "Copy all log" button.
+      const full = url.searchParams.get("full") === "1";
       const lines = parseInt(url.searchParams.get("lines") ?? "200", 10) || 200;
       const clampedLines = Math.max(1, Math.min(5000, lines));
 
       try {
-        const content = readLogTail(entry.log_file, clampedLines);
+        const content = full
+          ? readLogTail(entry.log_file, Infinity, FULL_LOG_MAX_BYTES)
+          : readLogTail(entry.log_file, clampedLines);
         sendJson(res, 200, { name, project, content, alive: isEntryAlive(entry) });
       } catch (e: any) {
         sendJson(res, 500, { error: e.message });
@@ -205,6 +214,20 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
       setTimeout(broadcastProcessList, 200);
       return;
     }
+
+    // Restart process (kill if alive, re-spawn with same command/cwd/env)
+    if (method === "POST" && sub === "/restart") {
+      const result = restartProcess(project, name);
+      if (!result.ok) {
+        process.stderr.write(`bg-manager: restart failed ${project}/${name}: ${result.error}\n`);
+        return sendJson(res, result.notFound ? 404 : 500, { error: result.error, name });
+      }
+      sendJson(res, 200, { restarted: true, name, pid: result.pid });
+      // Force: the process is ALIVE before and after, so only the PID changed —
+      // the change-detection diff would otherwise suppress this update.
+      setTimeout(() => broadcastProcessList(true), 200);
+      return;
+    }
   }
 
   // Static assets from web/dist/
@@ -238,16 +261,27 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
 
 // ── Log helpers ──────────────────────────────────────────────────
 
-function readLogTail(logFile: string, lines: number): string {
+// Default tail budget for the windowed (last-N-lines) read.
+const DEFAULT_TAIL_BYTES = 256 * 1024; // 256KB for web UI (more generous than MCP tool)
+// Ceiling for the full-log read. "No truncation" for any realistic dev log while
+// guarding against OOM / V8's ~512MB max-string-length on pathological files;
+// xterm's scrollback (100k lines) is the effective on-screen limit anyway.
+const FULL_LOG_MAX_BYTES = 50 * 1024 * 1024; // 50MB
+
+/**
+ * Read a log file. Reads at most `maxBytes` from the end (trimmed to a line
+ * boundary when the file is larger). When `lines` is finite, returns only the
+ * last N lines; pass Infinity to return the whole (byte-capped) content.
+ */
+function readLogTail(logFile: string, lines: number, maxBytes: number = DEFAULT_TAIL_BYTES): string {
   const stat = statSync(logFile);
-  const MAX_READ = 256 * 1024; // 256KB for web UI (more generous than MCP tool)
 
   let content: string;
-  if (stat.size > MAX_READ) {
+  if (stat.size > maxBytes) {
     const fd = openSync(logFile, "r");
     try {
-      const buf = Buffer.alloc(MAX_READ);
-      readSync(fd, buf, 0, MAX_READ, stat.size - MAX_READ);
+      const buf = Buffer.alloc(maxBytes);
+      readSync(fd, buf, 0, maxBytes, stat.size - maxBytes);
       content = buf.toString("utf-8");
       const firstNewline = content.indexOf("\n");
       if (firstNewline > 0) content = content.slice(firstNewline + 1);
@@ -258,6 +292,7 @@ function readLogTail(logFile: string, lines: number): string {
     content = readFileSync(logFile, "utf-8");
   }
 
+  if (!Number.isFinite(lines)) return content;
   const allLines = content.split("\n");
   return allLines.slice(-lines).join("\n");
 }

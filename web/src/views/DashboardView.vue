@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import Toolbar from '@/components/Toolbar.vue'
@@ -9,7 +9,7 @@ import { useProcesses } from '@/composables/useProcesses'
 
 const route = useRoute()
 const router = useRouter()
-const { processes, connected, killProcess, cleanup } = useProcesses()
+const { processes, connected, killProcess, restartProcess, cleanup } = useProcesses()
 
 const projectFilter = computed({
   get: () => (route.query.project as string) || '',
@@ -24,11 +24,21 @@ const selected = computed(() => {
   return null
 })
 
-const filteredProcesses = computed(() =>
-  projectFilter.value
+// Closed (completed/dead) processes are hidden by default — toggle in the toolbar.
+const showClosed = ref(false)
+
+const filteredProcesses = computed(() => {
+  let list = projectFilter.value
     ? processes.value.filter(p => p.project === projectFilter.value)
-    : processes.value,
-)
+    : processes.value
+  if (!showClosed.value) {
+    // Keep the currently-selected process visible even if it's closed, so it
+    // doesn't vanish from the list (and lose its highlight) the moment it exits.
+    const sel = selected.value
+    list = list.filter(p => p.alive || (sel != null && p.project === sel.project && p.name === sel.name))
+  }
+  return list
+})
 
 function onSelect(project: string, name: string) {
   router.push({ name: 'process', params: { project, name } })
@@ -46,7 +56,9 @@ async function onKill(project: string, name: string) {
     <Toolbar
       :processes="processes"
       :filter="projectFilter"
+      :show-closed="showClosed"
       @update:filter="projectFilter = $event"
+      @update:show-closed="showClosed = $event"
       @cleanup="cleanup"
     />
     <main class="flex-1 grid grid-cols-[420px_1fr] overflow-hidden max-md:grid-cols-1 max-md:grid-rows-[40vh_1fr]">
@@ -60,6 +72,7 @@ async function onKill(project: string, name: string) {
       <LogViewer
         :selected="selected"
         :processes="processes"
+        :restart="restartProcess"
       />
     </main>
   </div>

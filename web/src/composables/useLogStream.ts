@@ -14,11 +14,12 @@ export function useLogStream(
     if (abortController) { abortController.abort(); abortController = null }
   }
 
-  // Watch both: on direct URL navigation, selected is set before logContent mounts
-  watch([selected, logContent], async ([sel]) => {
+  // Load the full log history, then follow it live. Shared by the selection
+  // watcher and reload() (called after a restart to re-read the fresh log).
+  async function start(sel: { project: string; name: string }) {
     closeStream()
 
-    if (!sel || !logContent.value) return
+    if (!logContent.value) return
 
     const lc = logContent.value
     lc.clear()
@@ -28,9 +29,11 @@ export function useLogStream(
     const { signal } = abortController
 
     try {
-      const url = `${API_BASE}/api/processes/${encodeURIComponent(sel.project)}/${encodeURIComponent(sel.name)}/logs?lines=500`
+      // full=1: load the entire log (no tail truncation) — xterm virtualizes rendering.
+      const url = `${API_BASE}/api/processes/${encodeURIComponent(sel.project)}/${encodeURIComponent(sel.name)}/logs?full=1`
       const res = await fetch(url, { signal })
       if (signal.aborted) return
+      if (!res.ok) { lc.write('\x1b[31mFailed to load logs\x1b[0m\r\n'); return }
       const data = await res.json()
 
       // Verify selection hasn't changed during fetch
@@ -62,9 +65,22 @@ export function useLogStream(
     logSSE.onerror = () => {
       // Stream ended (process died, file gone, connection lost)
     }
+  }
+
+  // Watch both: on direct URL navigation, selected is set before logContent mounts
+  watch([selected, logContent], ([sel]) => {
+    if (!sel || !logContent.value) { closeStream(); return }
+    void start(sel)
   })
+
+  /** Clear and re-read the current process's log (e.g. after a restart). */
+  function reload() {
+    const sel = selected.value
+    if (!sel) return
+    void start(sel)
+  }
 
   onUnmounted(closeStream)
 
-  return { closeStream }
+  return { closeStream, reload }
 }

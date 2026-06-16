@@ -40,6 +40,15 @@ export function useProcesses() {
     } catch { /* server may be down */ }
   }
 
+  async function restartProcess(project: string, name: string) {
+    try {
+      await fetch(
+        `${API_BASE}/api/processes/${encodeURIComponent(project)}/${encodeURIComponent(name)}/restart`,
+        { method: 'POST' },
+      )
+    } catch { /* server may be down */ }
+  }
+
   async function cleanup() {
     try {
       await fetch(`${API_BASE}/api/cleanup`, { method: 'POST' })
@@ -53,5 +62,5 @@ export function useProcesses() {
     sse = null
   })
 
-  return { processes, connected, killProcess, cleanup }
+  return { processes, connected, killProcess, restartProcess, cleanup }
 }

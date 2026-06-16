@@ -9,6 +9,7 @@
  *   sync_run(name, command, intent, timeout_sec?, working_dir?, env?, lines?, raw?, filter?, filter_regex?, max_bytes?)  — run synchronously, convert to bg on timeout
  *   bg_list()                       — list all tracked processes with status
  *   bg_kill(name)                   — kill a tracked process by name
+ *   bg_restart(name)                — kill (if alive) and re-spawn with the same command/cwd/env
  *   read_log(name, lines?, raw?, filter?, filter_regex?) — read and filter a process log
  *   bg_port_check(port)             — check what's listening on a port
  *   bg_port_kill(port)              — kill whatever is listening on a port
@@ -25,7 +26,7 @@ import {
 import { ensureDb, closeDb, DB_PATH } from "./db.js";
 import { migrateFromJson } from "./migrate.js";
 import { startHttpServer, shutdownHttpServer } from "./server.js";
-import { setProjectRoot, bgRun, syncRun, bgList, bgKill, readLog, bgPortCheck, bgPortKill, bgCleanup } from "./tools.js";
+import { setProjectRoot, bgRun, syncRun, bgList, bgKill, bgRestart, readLog, bgPortCheck, bgPortKill, bgCleanup } from "./tools.js";
 import { drainPendingEvents, setServer } from "./notifier.js";
 import { shutdownAllTriggers } from "./trigger-monitor.js";
 
@@ -226,6 +227,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "bg_restart",
+      description:
+        "Restart a tracked process by name: kills it (if still running) and re-spawns with the SAME command, working dir and env from the registry.\n" +
+        "- The log file is reset (truncated) for a clean run. Follow it with read_log.\n" +
+        "- Works on both running and completed entries (re-runs a finished command).\n" +
+        "- In-memory triggers are re-applied to the new PID; the process is restarted as a background process.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name: {
+            type: "string",
+            description: "Name of the process to restart (as given to bg_run / sync_run)",
+          },
+        },
+        required: ["name"],
+      },
+    },
+    {
       name: "read_log",
       description:
         "Read and filter the log of ANY tracked process — both bg_run (background processes) and sync_run (synchronous runs). General-purpose log reader.\n" +
@@ -344,6 +363,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       break;
     case "bg_kill":
       result = bgKill((args as any).name);
+      break;
+    case "bg_restart":
+      result = bgRestart((args as any).name);
       break;
     case "read_log":
       result = readLog(
